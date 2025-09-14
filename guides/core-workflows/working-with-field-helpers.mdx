@@ -1,0 +1,330 @@
+---
+title: "Working with Field Helpers"
+description: "Comprehensive guidance on generating and using model-driven field helpers for filters, updates, ordering, and association operations. Includes detailed examples of common predicates and state changes."
+---
+
+# Working with Field Helpers
+
+This guide provides comprehensive, practical instructions for generating and using **model-driven field helpers** in GORM CLI. These helpers enable you to write expressive, type-safe filters, updates, ordering, and manage associations with ease. You'll learn how to apply predicates, perform updates—including handling zero-values and SQL expressions—and handle associations reliably, all supported by clear examples and best practices.
+
+---
+
+## 1. Understanding Field Helpers
+
+GORM CLI generates **field helpers** based on your Go model structs. These helpers are strongly typed objects that correspond to your model fields, supporting:
+
+- **Predicates for filtering:** e.g., `Eq()`, `Gt()`, `IsNull()`, `Like()`, etc.
+- **Update and create operations:** e.g., `Set(value)`, `SetExpr(expr)`, `Incr(n)`, and support for zero-value fields
+- **Association operations:** single related object or slices to create, update, unlink, or delete associations
+- **Custom field types support:** through type mapping, e.g., JSON types generating database-specific SQL
+
+These helpers elevate your database code by providing fluent, discoverable, and compile-time verified APIs.
+
+<Check>
+Field helpers are generated automatically during code generation from your model structs and have the form `generated.<Model>.<Field>`. For example, `generated.User.Name` is a string field helper for the `User` model's `Name`.
+</Check>
+
+---
+
+## 2. Workflow Overview
+
+### Task Description
+Generate and use type-safe, idiomatic Go field helpers for querying and modifying your database with GORM CLI.
+
+### Prerequisites
+- Have your Go model structs defined (e.g., `User`, `Account`).
+- Run GORM CLI to generate code, producing `generated` package with field helpers.
+- `gorm.io/gorm` and `gorm.io/cli/gorm` dependencies installed.
+
+### Expected Outcome
+By following this guide, you will:
+- Use field helpers for expressive filtering, updating, and creating data.
+- Manage zero-value updates and SQL expressions seamlessly.
+- Handle complex associations with generated helpers.
+- Extend functionality through custom helpers like JSON.
+
+### Time Estimate
+10-20 minutes to understand and apply basic to intermediate usage.
+
+### Difficulty Level
+Intermediate: Basic Go and GORM knowledge recommended.
+
+---
+
+## 3. Key Concepts and Usage Patterns
+
+### 3.1 Using Predicates for Queries
+
+Filter your queries with the model-driven field helpers for safe, clear conditional expressions.
+
+Example: Find users over 18 with role "active".
+
+```go
+var users []models.User
+err := gorm.G[models.User](db).
+	Where(
+		generated.User.Age.Gt(18),
+		generated.User.Role.Eq("active"),
+	).Find(ctx, &users)
+if err != nil {
+	// handle error
+}
+```
+
+**Common predicate methods:**
+- `Eq(value)`: equals
+- `Neq(value)`: not equals
+- `Gt(value)`, `Gte(value)`: greater than, greater or equal
+- `Lt(value)`, `Lte(value)`: less than, less or equal
+- `Like(pattern)`: SQL LIKE
+- `IsNull()`, `IsNotNull()`: NULL checks
+- `In(values...)`: IN clause
+
+---
+
+### 3.2 Updates and Creating Records
+
+You can use field helpers for `Set()` assignments during `Update()` or `Create()` calls to express field updates and inserts clearly.
+
+```go
+// Update 'role' from "pending" to "active" for pending users
+rows, err := gorm.G[models.User](db).
+	Where(generated.User.Role.Eq("pending")).
+	Set(
+		generated.User.Role.Set("active"),
+	).
+	Update(ctx)
+if err != nil {
+	// handle error
+}
+```
+
+You also can combine multiple fields, including zero values and SQL expressions:
+
+```go
+rows, err := gorm.G[models.User](db).
+	Where(generated.User.Name.Eq("cathy")).
+	Set(
+		generated.User.Role.Set("") ,          // zero string
+		generated.User.IsAdult.Set(false),     // zero bool
+		generated.User.Score.Set(sql.NullInt64{}), // NULL
+		generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{2}}),
+	).
+	Update(ctx)
+```
+
+**Helpful update methods:**
+- `Set(value)`: set to explicit value (including zero)
+- `SetExpr(clause.Expr)`: set via SQL expression
+- `Incr(n)`: increment numeric fields
+- Convenience expressions like `Upper()` for strings
+
+---
+
+### 3.3 Creating Records with Field Helpers
+
+Similarly, you can insert new records by providing `Set()` assignments and then calling `Create(ctx)`:
+
+```go
+err := gorm.G[models.User](db).
+	Set(
+		generated.User.Name.Set("set_user"),
+		generated.User.Age.Set(29),
+		generated.User.Role.Set("active"),
+		generated.User.IsAdult.Set(true),
+		generated.User.Score.Set(sql.NullInt64{Int64: 99, Valid: true}),
+	).
+	Create(ctx)
+```
+
+This approach safely initializes all required fields with compile-time type checks.
+
+---
+
+### 3.4 Working with Nullable and Custom Fields
+
+Fields with nullable types support `IsNull()` and `IsNotNull()` predicates.
+
+For example, filtering users whose `LastLogin` is null:
+
+```go
+count, err := gorm.G[models.User](db).
+	Where(generated.User.LastLogin.IsNull()).
+	Count(ctx, "*")
+```
+
+Custom helpers like a JSON field provide database-aware query methods:
+
+```go
+// Filter where JSON profile field vip==true
+user, err := gorm.G[models.User](db).
+	Where(generated.User.Profile.Equal("$.vip", 1)).
+	Take(ctx)
+```
+
+This generates correct JSON-extraction SQL for MySQL, SQLite, or PostgreSQL.
+
+---
+
+## 4. Managing Associations with Field Helpers
+
+Associations are generated as `field.Struct[T]` (single entity) or `field.Slice[T]` (collections). These support operations such as create, update, unlink, and delete with conditions.
+
+### Typical Association Operations
+
+- **Create:** Add and link a new associated record
+- **Update:** Modify associated records matching conditions
+- **Unlink:** Remove association link without deleting data
+- **Delete:** Remove associated records (or join rows for many2many)
+- **CreateInBatch:** Batch add many associated records
+
+```go
+// Create and associate a pet while creating a user
+gorm.G[User](db).
+	Set(
+		generated.User.Name.Set("alice"),
+		generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+	).
+	Create(ctx)
+
+// Update pet named 'fido' for user ID=1
+gorm.G[User](db).
+	Where(generated.User.ID.Eq(1)).
+	Set(
+		generated.User.Pets.Where(generated.Pet.Name.Eq("fido"))
+			.Update(generated.Pet.Name.Set("rex")),
+	).
+	Update(ctx)
+
+// Unlink pets for user ID=1
+gorm.G[User](db).
+	Where(generated.User.ID.Eq(1)).
+	Set(generated.User.Pets.Unlink()).
+	Update(ctx)
+
+// Delete pets linked to user ID=1
+gorm.G[User](db).
+	Where(generated.User.ID.Eq(1)).
+	Set(generated.User.Pets.Delete()).
+	Update(ctx)
+
+// Batch create languages for user id=1 (many2many)
+gorm.G[User](db).
+	Where(generated.User.ID.Eq(1)).
+	Set(generated.User.Languages.CreateInBatch(
+		[]models.Language{{Code: "EN"}, {Code: "FR"}},
+	)).
+	Update(ctx)
+```
+
+### Association semantics summary
+
+| Association Type | Unlink Effect                 | Delete Effect               |
+|------------------|------------------------------|-----------------------------|
+| Belongs To       | Set parent FK to NULL         | Delete associated rows      |
+| Has One/Has Many  | Set child FK to NULL          | Delete child rows           |
+| Many2Many        | Remove join table rows only   | Remove join table rows only |
+
+---
+
+## 5. Practical Examples
+
+### Example: Filtering and Counting
+
+```go
+count, err := gorm.G[models.User](db).
+	Where(generated.User.Role.Eq("active")).
+	Count(ctx, "*")
+if err != nil {
+	// handle error
+}
+```
+
+### Example: Update with Increment
+
+```go
+rows, err := gorm.G[models.User](db).
+	Where(generated.User.Name.Eq("bob")).
+	Set(generated.User.Age.Incr(3)).
+	Update(ctx)
+```
+
+### Example: Complex Update with Expressions
+
+```go
+rows, err := gorm.G[models.User](db).
+	Where(generated.User.Name.Eq("cathy")).
+	Set(
+		generated.User.Role.Set("") ,
+		generated.User.IsAdult.Set(false),
+		generated.User.Score.Set(sql.NullInt64{}),
+		generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{2}}),
+	).
+	Update(ctx)
+```
+
+### Example: Using Custom JSON Field Helper
+
+```go
+// Filter for users where JSON profile indicates vip status
+user, err := gorm.G[models.User](db).
+	Where(generated.User.Profile.Equal("$.vip", 1)).
+	Take(ctx)
+```
+
+---
+
+## 6. Best Practices & Tips
+
+- Always use field helpers for predicates and updates instead of raw strings to gain compile-time safety.
+- Use `Set()` with explicit zero values to overwrite fields, avoiding accidental omissions.
+- For numeric fields, use `Incr()` or `SetExpr()` for atomic increments or complex expressions.
+- Use association helpers for any relational changes to ensure correct foreign key or join table management.
+- Extend field helpers with custom types for database-specific logic, like JSON query helpers.
+
+<Warning>
+Avoid mixing raw SQL strings with generated helpers in update or where clauses to keep code maintainable and type-safe.
+</Warning>
+
+---
+
+## 7. Troubleshooting Common Issues
+
+<AccordionGroup title="Common Problems When Using Field Helpers">
+<Accordion title="Update does not affect expected rows">
+- Verify your `Where()` predicates using field helpers match the intended records.
+- Use `Count()` with the same predicates to confirm selection.
+</Accordion>
+<Accordion title="Created records missing expected values">
+- Ensure all required fields have `Set()` assignments.
+- Remember zero values (empty strings, zero ints) need explicit `Set(value)` calls.
+</Accordion>
+<Accordion title="Association updates not applied correctly">
+- Use association-specific helpers (e.g., `.Pets.Update()`, `.Languages.CreateInBatch()`).
+- Verify foreign key and association names match your model definitions.
+</Accordion>
+<Accordion title="JSON custom field queries failing">
+- Confirm your database supports the required JSON functions (e.g., JSON1 extension for SQLite).
+- Use the provided JSON helper methods to safely build expressions.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 8. Next Steps & Related Content
+
+- [Quickstart: Generate and Use Type-Safe APIs](/guides/core-workflows/quickstart-guide) — get up and running fast with generation and usage.
+- [Managing Associations with Generated Code](/guides/core-workflows/associations-guide) — dive deeper into association operations.
+- [Customizing Generation with genconfig](/guides/advanced-patterns/customizing-generation) — learn to map custom types to field helpers.
+- [Template DSL Guide](/guides/advanced-patterns/template-dsl-guide) — master SQL templating for complex queries.
+- Validation and troubleshooting:
+  - [Quick Validation Steps](/getting-started/validation-and-troubleshooting/quick-validation)
+  - [Troubleshooting Common Setup Issues](/getting-started/validation-and-troubleshooting/troubleshooting-common-issues)
+
+---
+
+This page focuses exclusively on how to effectively use the **generated field helpers** for querying, updating, and managing associations, complementing your queries and business logic with strongly-typed, safe, and expressive code.
+
+For a complete workflow including writing interfaces and running the generator, refer to the Quickstart and Getting Started sections in the documentation.
+
+---

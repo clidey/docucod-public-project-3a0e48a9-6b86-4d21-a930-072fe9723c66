@@ -1,0 +1,293 @@
+---
+title: "Field Helpers & Association Semantics"
+description: "Get clarity on how generated field helpers represent both simple Go types and complex associations. Understand the semantics for filter, update, ordering, and advanced association operations such as Create, Update, Unlink, and Delete—including how these map to underlying SQL behaviors."
+---
+
+# Field Helpers & Association Semantics
+
+This guide clarifies how GORM CLI generates and represents both simple fields and complex associations via field helpers. It explains how these generated helpers empower you to express filters, updates, ordering, and advanced association operations like Create, Update, Unlink, and Delete with type safety and clear semantics. You'll understand how these operations translate to underlying SQL actions, helping you manage both standalone fields and relational data elegantly.
+
+---
+
+## Understanding Field Helpers
+
+Field helpers are generated types that wrap your Go struct fields and provide methods for building expressive and type-safe database queries and updates.
+
+- **Basic Fields:** Include primitive types such as `int`, `string`, `bool`, `time.Time`, nullable types (e.g., `sql.NullInt64`), and any types mapped via custom configuration.
+- **Association Fields:** Represent relationships between structs and fall into two main categories:
+  - `field.Struct[T]`: Represents a single related entity (e.g., belongs to, has one).
+  - `field.Slice[T]`: Represents multiple related entities (e.g., has many, many-to-many).
+
+This distinction enables tailored helper methods for querying, updating, and managing these fields.
+
+### Basic Field Helpers
+
+For simple fields, generated helpers expose methods such as:
+
+- **Predicates:** `Eq()`, `Gt()`, `Lt()`, `Between()`, `IsNull()`, and more for filtering.
+- **Setters:** `Set()`, `SetExpr()`, or expression-based setters like `Incr()` for updates and creates.
+- **Ordering and Counting:** Use generated helpers to specify ordering or to count rows matching predicates.
+
+Example:
+
+```go
+// Find users older than 18 with role "active"
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx)
+
+// Update user role from "pending" to "active"
+_, err = gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Update(ctx, "role", "active")
+```
+
+### Nullable and Custom Field Support
+
+The generator respects nullable SQL types (e.g., `sql.NullInt64`) and supports special cases through configuration (e.g., JSON fields). This lets you write SQL functions or dialect-specific queries, such as JSON containment checks, using methods on the field helpers.
+
+Example for JSON querying (using a custom JSON helper):
+
+```go
+// Find users where JSON `Profile.vip` is true
+u, err := gorm.G[models.User](db).
+    Where(generated.User.Profile.Equal("$.vip", true)).
+    Take(ctx)
+```
+
+---
+
+## Association Field Helpers & Semantics
+
+Associations represent relational links between entities. GORM CLI generates specialized helpers to manipulate these associations with clear intent and SQL semantics.
+
+### Association Field Types
+
+- **`field.Struct[T]` (Single Association):** For "has one", "belongs to" relations with one related record.
+- **`field.Slice[T]` (Multiple Association):** For "has many" or "many to many" relations with zero or more related records.
+
+These types provide methods that create structured, composable database operations.
+
+### Supported Association Operations
+
+All association operations are designed to be used within the `Set(...).Update(ctx)` or `Set(...).Create(ctx)` calls, which apply mutations to related records in the scope of matched parent records.
+
+| Operation     | Purpose                                                  | Use Case Example                                                                      |
+|---------------|----------------------------------------------------------|---------------------------------------------------------------------------------------|
+| `Create`      | Create and link associated records                       | Create pets while creating a user                                                    |
+| `CreateInBatch` | Batch-create multiple associated records per parent      | Link multiple languages to a user                                                    |
+| `Update`      | Update associated records with optional filtering       | Update user’s pets where name = "fido"                                            |
+| `Unlink`      | Remove association without deleting associated records  | Clear FK relationships or remove join table rows                                    |
+| `Delete`      | Delete associated records or unlink join table rows     | Remove all pets for a user or delete join rows in many-to-many                       |
+
+### How These Map to SQL
+
+- **Create:** Inserts related rows and links them to the parent.
+- **Update:** Runs an update against associated rows optionally filtered by conditions.
+- **Unlink:** Sets foreign keys to `NULL` to sever association or deletes join table entries for many-to-many relationships, without deleting associated records.
+- **Delete:** Deletes associated rows themselves (including join table rows for many-to-many).
+
+### Semantics by Association Type
+
+| Association   | `Unlink` Effect                           | `Delete` Effect                         |
+|---------------|------------------------------------------|----------------------------------------|
+| Belongs To    | Set parent foreign key to NULL           | Delete associated record(s)            |
+| Has One/Many  | Set child foreign key to NULL             | Delete child record(s)                  |
+| Many-to-Many  | Delete rows from join table only         | Delete rows from join table only       |
+
+### Applying Conditions to Association Operations
+
+You can filter association targets before applying operations using `.Where(...)`. For example, update or delete only pets with name "fido":
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+      Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+```
+
+### Example: Create and Link Associations
+
+Create a new user with one pet:
+
+```go
+gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+Create a user and link multiple languages (many-to-many):
+
+```go
+gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("polyglot"),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Create(ctx)
+```
+
+### Example: Unlink Associations
+
+Unlink all pets for a user without deleting the pet records:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+### Example: Delete Associations
+
+Delete all pets associated with a user:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+```
+
+---
+
+## Common Workflow Patterns
+
+### Updating Fields and Associations Together
+
+You can combine zero-value updates, expressions, and association operations in a single fluent update:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("cathy")).
+  Set(
+    generated.User.Role.Set("") ,           // zero string
+    generated.User.IsAdult.Set(false),        // zero bool
+    generated.User.Score.Set(sql.NullInt64{}),// NULL value
+    generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{2}}), // SQL expression
+    generated.User.Pets.Delete(),             // delete pets
+  ).
+  Update(ctx)
+```
+
+### Incrementing Numeric Fields
+
+Use the `Incr` helper to increment an integer field atomically:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(
+    generated.User.Age.Incr(3),
+  ).
+  Update(ctx)
+```
+
+### Creating Records with Default and Nullable Values
+
+Create records while setting nullable fields or zero values explicitly:
+
+```go
+gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("set_user"),
+    generated.User.Age.Set(29),
+    generated.User.IsAdult.Set(true),
+    generated.User.Score.Set(sql.NullInt64{Int64: 99, Valid: true}),
+  ).
+  Create(ctx)
+```
+
+---
+
+## Practical Tips & Best Practices
+
+- **Use field helpers for all conditions and updates:** They ensure compile-time safety and avoid common mistakes such as mismatched column names or SQL syntax errors.
+- **Leverage association methods to keep relational integrity:** Use `Unlink` when you want to clear relationships without data loss, and `Delete` when associated data should be removed.
+- **Combine filters with association operations:** `.Where(...)` before `.Update()` or `.Delete()` scopes the operation to relevant associated rows.
+- **Be explicit about zero values:** Use setters like `.Set("")` or `.Set(sql.NullInt64{})` to persist zero or null as intended instead of omitting.
+- **Use batch creates for multi-associations:** `CreateInBatch` handles inserting multiple child records efficiently for has-many or many-to-many associations.
+
+---
+
+## Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Association Updates">
+<Accordion title="Update or Delete Doesn't Affect Expected Records">
+Verify the conditions passed in `.Where(...)` before `.Update()` or `.Delete()`. Ensure predicate methods like `.Eq()`, `.Gt()` target the correct column and values. Mistakes here commonly cause no-op operations.
+</Accordion>
+<Accordion title="Unlink Not Working as Expected">
+Check that the association is correctly identified in your model and that foreign keys allow NULL values where applicable. For many-to-many, unlink removes join table entries only.
+</Accordion>
+<Accordion title="Batch Create Errors">
+When using `CreateInBatch`, ensure the slice values are correctly typed and valid; the generator expects `[]T` corresponding to the association's element type.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Summary
+
+This page explained GORM CLI's generated field helpers for both primitive fields and complex associations. You learned how these helpers encapsulate filter predicates, update setters, and association operations — including create, update, unlink, and delete — all with clear mapping to SQL semantics. Practical examples demonstrated fluent workflows governing fields and relational data, while tips and troubleshooting advice help ensure success.
+
+---
+
+## Related Documentation
+
+- [Working with Field Helpers](../guides/core-workflows/working-with-field-helpers) — Detailed usage of field helpers for filters, updates, and custom fields.
+- [Associations Guide](../guides/core-workflows/associations-guide) — Comprehensive guide on managing associations at runtime.
+- [Core Concepts & Terminology](../../overview/introduction-and-key-concepts/core-concepts-and-terminology) — Foundational concepts for understanding generated code.
+- [Example Models and Tests](../../examples/output/models_field_helpers_test.go) — Concrete examples with tests demonstrating operational usage.
+
+---
+
+## Quick Reference Code Snippets
+
+```go
+// Find users over 18 with active role
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).Find(ctx)
+
+// Update user role
+_, err = gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Update(ctx, "role", "active")
+
+// Create a user with one pet
+err := gorm.G[models.User](db).
+    Set(
+      generated.User.Name.Set("alice"),
+      generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+    ).Create(ctx)
+
+// Update user’s pet named "fido"
+err = gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(
+      generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex")),
+    ).Update(ctx)
+
+// Unlink all user pets
+err = gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Unlink()).
+    Update(ctx)
+
+// Delete old user pets
+err = gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete()).
+    Update(ctx)
+
+// Batch add languages
+err = gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}})).
+    Update(ctx)
+```
