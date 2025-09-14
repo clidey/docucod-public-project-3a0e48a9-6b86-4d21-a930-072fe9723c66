@@ -1,0 +1,234 @@
+---
+title: "Core Concepts & Terminology"
+description: "Grasp essential terms and mechanisms that underpin GORM CLI: query interfaces, SQL templates, model-driven field helpers, associations, configuration overrides, and template DSL. This shared vocabulary accelerates team onboarding and builds confidence as you explore deeper documentation."
+---
+
+# Core Concepts & Terminology
+
+Welcome to the foundational page that equips you with the essential vocabulary and mechanisms powering **GORM CLI**. Understanding these core concepts enables you and your team to onboard swiftly, communicate effectively, and navigate the deeper technical documentation with confidence.
+
+---
+
+## What This Page Covers
+This section explains the fundamental terms and mechanisms at the heart of GORM CLI's functionality, including:
+
+- Query interfaces and how SQL templates are embedded
+- Model-driven field helpers for type-safe access
+- Rich association operations and their semantics
+- Configuration overrides via central config
+- Template Domain-Specific Language (DSL) for dynamic SQL
+
+By mastering this shared vocabulary, you'll unlock the full potential of GORM CLI's code generation capabilities.
+
+---
+
+## Understanding Query Interfaces
+
+### What Are Query Interfaces?
+Query interfaces are Go interfaces defined by you that declare method signatures alongside embedded SQL templates in their comments. Each method's signature defines the inputs and expected outputs, while the SQL template provides the query logic that GORM CLI will process into type-safe, fluent Go code.
+
+### Why Use Query Interfaces?
+They enable you to:
+
+- Write raw and flexible SQL queries with compile-time safety
+- Bind Go method parameters directly into your SQL with zero runtime reflection
+- Receive fully typed results matching your Go models
+
+### Example Query Interface
+
+```go
+// User queries with SQL templating
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+}
+```
+
+### SQL Template Highlights
+- `@@table` resolves to the current model’s database table.
+- `@paramName` binds Go method parameters safely into SQL.
+
+The generator adds context parameters automatically if missing, ensuring smooth integration.
+
+---
+
+## Model-Driven Field Helpers
+
+### What Are Model-Driven Field Helpers?
+From your GORM model structs, GORM CLI generates strongly typed field helpers to simplify building queries, updates, and filters with fluent API methods.
+
+### Why They Matter
+They provide:
+
+- Compile-time checked predicate builders like `.Eq()`, `.Like()`, `.Between()` for fields
+- Type-safe setters for updates and creates, including zero-values and expressions
+- Association helpers for relations: has one, has many, belongs to, many-to-many
+
+### Example Field Helpers
+
+Given a User model:
+
+```go
+type User struct {
+    ID   uint
+    Name string
+    Age  int
+}
+```
+
+You get generated helpers like:
+
+```go
+generated.User.ID.Eq(1)        // id = 1
+generated.User.Name.Like("%jinzhu%")  // name LIKE '%jinzhu%'
+generated.User.Age.Between(18, 65)      // age BETWEEN 18 AND 65
+```
+
+### Association Helpers
+
+For relations, helpers use the generic types `field.Struct[T]` or `field.Slice[T]` for linked models:
+
+- `generated.User.Account` (has one)
+- `generated.User.Pets` (has many)
+- `generated.User.Languages` (many2many)
+
+They support operations:
+
+- Create/CreateInBatch
+- Update
+- Unlink (removes FK or join rows without deleting)
+- Delete (removes linked rows or join rows in m2m)
+
+---
+
+## Association Operation Semantics
+
+| Association Type | Unlink Behavior                 | Delete Behavior                      |
+|------------------|--------------------------------|------------------------------------|
+| belongs to       | Set parent FK to NULL           | Delete associated rows             |
+| has one / has many | Set child FK to NULL            | Delete child rows                  |
+| many2many        | Remove join rows only           | Remove join rows only              |
+
+> Parent operations (`Create(ctx)` and `Update(ctx)`) trigger these actions atomically with parent row changes.
+
+---
+
+## Configuration Overrides (`genconfig.Config`)
+
+You can customize generation behavior by declaring a `genconfig.Config` package-level variable, which the generator detects automatically:
+
+### Key Options
+
+- `OutPath`: Override output directory for generated code per package
+- `FieldTypeMap`: Map Go types to custom field helper types
+- `FieldNameMap`: Map tags or names to custom field helpers (e.g., JSON)
+- `FileLevel`: Limit config to single file instead of entire package
+- Include/Exclude Lists:
+  - `IncludeInterfaces`, `ExcludeInterfaces`
+  - `IncludeStructs`, `ExcludeStructs`
+
+### Example Config
+
+```go
+var _ = genconfig.Config{
+    OutPath: "examples/output",
+    FieldNameMap: map[string]any{
+        "json": JSON{},
+    },
+    IncludeInterfaces: []any{"Query*"},
+}
+```
+
+---
+
+## Template Domain-Specific Language (DSL)
+
+The SQL template DSL lets you write expressive, dynamic SQL tied directly to method signatures:
+
+| Directive   | Purpose                            | Example                                  |
+| ----------- | -------------------------------- | ---------------------------------------- |
+| `@@table`   | Resolves to the model’s table name | `SELECT * FROM @@table WHERE id=@id`     |
+| `@@column`  | Dynamic column binding             | `WHERE @@column=@value`                  |
+| `@param`    | Bind Go parameter to SQL param     | `WHERE name=@user.Name`                  |
+| `{{where}}` | Conditional WHERE clause           | `{{where}} age > 18 {{end}}`             |
+| `{{set}}`   | Conditional SET clause (UPDATE)    | `{{set}} name=@name {{end}}`             |
+| `{{if}}`    | Conditional fragments              | `{{if age > 0}} AND age=@age {{end}}`   |
+| `{{for}}`   | Iterate over a collection          | `{{for _, t := range tags}} ... {{end}}` |
+
+### Example
+
+```sql
+SELECT * FROM @@table
+{{where}}
+  {{if name != ""}} name=@name {{end}}
+  {{if age > 0}} AND age=@age {{end}}
+{{end}}
+```
+
+This DSL empowers safe, concise, and flexible queries integrated with your Go code.
+
+---
+
+## Practical Tips & Best Practices
+
+- **Write interfaces and models close together:** Keeps querying and model logic tightly coupled.
+- **Leverage field helpers for queries:** Instead of writing raw SQL snippets, use generated predicates to reduce errors.
+- **Use config overrides consciously:** Target specific packages for custom output paths or field mappings.
+- **Check associations thoroughly:** Understanding unlink vs delete semantics prevents data loss.
+- **Use the DSL for dynamic queries:** Take advantage of `{{where}}` and `{{set}}` for optional filters and updates.
+
+---
+
+## Common Pitfalls to Avoid
+
+- Forgetting to return errors as the last return value in interface methods leads to generation failures.
+- Using interface methods without parameters may lead to implicit context parameter insertion — be aware.
+- Misusing association unlink/delete can cause unintended data modification; review semantics carefully.
+- Overlapping include/exclude config filters can exclude needed generation — always verify after config changes.
+
+---
+
+## Bringing It All Together: User Flow Example
+
+Imagine building a user management system:
+
+1. **Define your `User` struct** with Go struct tags and associations.
+2. **Write a `Query[T]` interface** with methods like `GetByID(id int) (T, error)` annotated with SQL templates.
+3. **Generate code** with `gorm gen -i ./models -o ./generated`.
+4. **Use generated APIs and field helpers** in your app:
+
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+users, err := gorm.G[User](db).
+  Where(generated.User.Age.Gt(18)).Find(ctx)
+```
+
+5. **Handle associations:**
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("Alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("Fido")),
+  ).
+  Create(ctx)
+```
+
+This smooth flow relies on your understanding of the terminology and concepts detailed on this page.
+
+---
+
+## Next Steps
+
+- Explore **[Architecture Overview](../architecture-and-concepts/architecture-overview)** for insight into system components and data flow.
+- Review the **[Feature Highlights](../../introduction-and-value/feature-highlights)** page to connect concepts with powerful capabilities.
+- Begin your hands-on journey with the **[Quickstart Workflow](../architecture-and-concepts/quickstart-workflow)**.
+
+As your knowledge grows, refer back here to reinforce foundational terms and avoid common pitfalls.
+
+---
+
+If at any point you wonder how these pieces fit or why certain patterns are recommended, this core concepts page is your anchor to clarity and efficient mastery.
