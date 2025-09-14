@@ -1,0 +1,229 @@
+---
+title: "Advanced Use: Custom Field Mapping"
+description: "Guides advanced users through mapping custom fields (like JSON fields) and using field tags for specialized behaviors. Explores extension patterns using the configuration API and practical examples of custom helper implementation."
+---
+
+# Advanced Use: Custom Field Mapping
+
+This guide empowers advanced users to extend the flexibility of GORM CLI by mapping custom fields and leveraging field tags for specialized behaviors. You will learn how to instruct GORM CLI to treat custom field types such as JSON columns using field tags, apply custom mapping rules in the generation configuration, and implement your own field helper types through the configuration API. Practical code examples and best practices illustrate how to seamlessly integrate these extensions into your existing workflows.
+
+---
+
+## Why Custom Field Mapping Matters
+
+In real-world applications, your database schema often includes specialized data types like JSON columns, custom enums, or complex serialized fields. GORM CLI's default field helper generation covers common Go types to produce predicates and setters with type safety. However, to align generated code with your unique schema and application semantics, mapping custom fields to field helpers is essential.
+
+Custom field mapping brings two key benefits:
+
+- **Accurate and expressive queries**: Use domain-specific SQL generation that respects your custom data format.
+- **Seamless type-safety**: Harness the power of generated helper methods tailored to your field semantics.
+
+## How Custom Field Mapping Works
+
+GORM CLI supports custom field mapping by combining:
+
+1. **Field Name Tags in Model Structs**
+2. **Generation Configuration (`genconfig.Config`) Mapping**
+3. **Custom Field Helper Types Implementation**
+
+Together, they enable you to customize the code generation pipeline without altering core behaviors.
+
+---
+
+## Step 1: Tag Your Model Fields
+
+Use the `gen` struct tag to label fields that require special handling. For example, to designate a field as JSON:
+
+```go
+package models
+
+type User struct {
+    ID      uint
+    Name    string
+    Profile string `gen:"json"`  // Maps this field to a JSON field helper
+}
+```
+
+This tag signals the code generator to look up the custom helper associated with the tag name "json".
+
+**Tip:** The tag key name (`gen`) is fixed for GORM CLI to detect.
+
+---
+
+## Step 2: Configure Custom Field Mapping in `genconfig.Config`
+
+Place a package-level variable named `genconfig.Config` in your query/model package to declare field mappings. In particular, use the `FieldNameMap` to assign tag names to custom field helper types.
+
+```go
+package examples
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "examples/output",
+
+    // Map Go standard type to default helpers
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+
+    // Map gen:"json" tags to the custom JSON helper
+    FieldNameMap: map[string]any{
+        "json": JSON{},
+    },
+}
+```
+
+The above config enables the generator to produce custom JSON helpers for any model field tagged with `gen:"json"`.
+
+---
+
+## Step 3: Implement Your Custom Field Helper
+
+A field helper is a Go type that provides methods for building type-safe SQL predicates and expressions. Below is a minimal example of a JSON field helper implementing custom SQL generation with proper database dialect support.
+
+```go
+package examples
+
+import (
+    "encoding/json"
+    "gorm.io/gorm/clause"
+    "gorm.io/gorm"
+)
+
+// JSON is a field helper for JSON columns with dialect-aware SQL generation.
+type JSON struct {
+    column clause.Column
+}
+
+func (j JSON) WithColumn(name string) JSON {
+    c := j.column
+    c.Name = name
+    return JSON{column: c}
+}
+
+// Equal constructs a JSON value equality condition using database-specific functions.
+func (j JSON) Equal(path string, value any) clause.Expression {
+    return jsonEqualExpr{col: j.column, path: path, val: value}
+}
+
+type jsonEqualExpr struct {
+    col  clause.Column
+    path string
+    val  any
+}
+
+func (e jsonEqualExpr) Build(builder clause.Builder) {
+    if stmt, ok := builder.(*gorm.Statement); ok {
+        switch stmt.Dialector.Name() {
+        case "mysql":
+            v, _ := json.Marshal(e.val)
+            clause.Expr{SQL: "JSON_EXTRACT(?, ?) = CAST(? AS JSON)", Vars: []any{e.col, e.path, string(v)}}.Build(builder)
+        case "sqlite":
+            clause.Expr{SQL: "json_valid(?) AND json_extract(?, ?) = ?", Vars: []any{e.col, e.col, e.path, e.val}}.Build(builder)
+        default: // postgres or others
+            clause.Expr{SQL: "jsonb_extract_path_text(?, ?) = ?", Vars: []any{e.col, e.path[2:], e.val}}.Build(builder)
+        }
+    }
+}
+```
+
+This example shows how the helper handles SQL generation depending on the database dialect to deliver correct and efficient JSON operations.
+
+---
+
+## Using the Custom Field Helper in Queries
+
+Once configured, the generated code lets you write expressive, type-safe queries involving your custom-mapped field as follows:
+
+```go
+package main
+
+import (
+    "context"
+    "gorm.io/gorm"
+    "your_project/generated"
+)
+
+func queryWithJSON(db *gorm.DB) error {
+    // Query user profile JSON for 'vip' tag equals true
+    user, err := generated.UserG(db).
+        Where(generated.User.Profile.Equal("$.vip", true)).
+        Take(context.Background())
+    if err != nil {
+        return err
+    }
+    // Use user...
+    return nil
+}
+```
+
+This usage demonstrates compile-time safety with the fluent API, and the generated SQL will adapt to your database.
+
+---
+
+## Best Practices and Tips
+
+- **Always keep your custom helper methods idiomatic** to the underlying database to maximize efficiency.
+- **Use the FieldNameMap in conjunction with `gen:"tag"` tags** for targeted field mapping without affecting unrelated fields.
+- **Test generated SQL on your target databases** to ensure dialect-specific correctness.
+- **Leverage JSON and other custom helpers in combination with standard field helpers** to cover complex queries involving multiple data types.
+- **Organize your custom helpers and configuration code cleanly** within your project to avoid confusion.
+
+---
+
+## Common Pitfalls
+
+<Warning>
+- Avoid assuming custom field helpers will work without configuration — you must declare mappings in `genconfig.Config`.
+- Mis-tagging struct fields or forgetting to apply the correct `gen:"tag"` will cause default generation, potentially leading to runtime errors.
+- Custom SQL inside field helpers should handle all relevant dialects or fallback gracefully to avoid broken queries.
+</Warning>
+
+---
+
+## Extending with Configuration API Patterns
+
+Beyond direct field name mapping, you can extend or override the generation behavior by:
+
+- Overriding field generation globally or per package with `FieldTypeMap`.
+- Applying inclusion/exclusion filters strategically to control which structs and interfaces are generated.
+- Using custom types implementing `gorm.io/gorm/clause.Expression` or other GORM interfaces to embed advanced logic in helpers.
+
+Refer to the `genconfig.Config` documentation and examples for detailed patterns.
+
+---
+
+## Summary Flow
+
+<Steps>
+  <Step title="Tag your model fields with `gen:&quot;...&quot;`">
+    Add struct tags to indicate which fields use custom types.
+  </Step>
+  <Step title="Declare field mappings in `genconfig.Config`">
+    Map these tags to your custom field helper types in the generation config.
+  </Step>
+  <Step title="Implement custom field helper">
+    Write Go types with methods generating dialect-specific SQL predicates.
+  </Step>
+  <Step title="Run code generation and use generated APIs">
+    Invoke `gorm gen` with your input and output paths, then use generated helpers in queries.
+  </Step>
+</Steps>
+
+---
+
+## Related Documentation
+
+- [Using Generated APIs in Your Application](/guides/core-workflows/using-generated-apis): Learn to employ generated query and field helper APIs effectively.
+- [Customizing Code Generation with genconfig](/guides/advanced-usage/customizing-generation): Comprehensive guide on generation customization.
+- [Adding and Using Custom Field Helpers (e.g. JSON)](/guides/advanced-usage/json-field-helpers): Practical tutorial for JSON helpers, extended example.
+- [Configurable Generation Concepts](/gorm-cli-concepts/configuration-and-integration/generation-configuration): Deep dive into configuration APIs.
+
+---
+
+By mastering custom field mapping, you unlock the power to tailor GORM CLI to your project's specialized data needs, preserving type safety and maximizing query expressiveness effortlessly.
