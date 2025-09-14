@@ -1,0 +1,275 @@
+---
+title: "Model-driven Field Helpers"
+description: "Guide to generating and using model-driven field helpers for filtering, updating, ordering, and association management. Explains supported types, typical usage, and fundamental patterns with working code samples."
+---
+
+# Model-driven Field Helpers
+
+## Overview
+
+This guide explains how to generate and use model-driven field helpers that enable safe, expressive, and type-aware filtering, updating, ordering, and association management directly from your Go model structs. Leveraging these field helpers simplifies query construction by providing strongly typed predicates and setters, as well as rich support for association operations with compile-time safety.
+
+### What You'll Achieve
+- Generate helpers tailored to your model fields and relationships
+- Use these helpers to build expressive queries and updates
+- Manage associations (has one, has many, belongs to, many2many) fluently
+- Handle custom and nullable field types seamlessly
+
+### Who Should Use This Guide
+Developers working with GORM CLI who want to maximize the power of generated model field helpers for cleaner, safer, and more maintainable database operations.
+
+---
+
+## 1. Understanding Model-driven Field Helpers
+
+Model-driven field helpers are generated structs and methods reflecting your model’s fields and relationships. They provide:
+
+- **Predicate methods** for filtering: `.Eq()`, `.Gt()`, `.Like()`, `.IsNull()`, etc.
+- **Setter methods** for updates and inserts: `.Set(value)`, `.SetExpr(expr)`, `.Incr(n)`, `.Upper()`, etc.
+- **Association operations** for complex relations: `.Create()`, `.Update()`, `.Unlink()`, `.Delete()`, `.CreateInBatch()`
+
+
+### Supported Field Types
+Helpers are generated for the following common field types:
+
+- Basic scalars: `int`, `uint`, `float`, `string`, `bool`
+- Time types: `time.Time`, `sql.NullTime`
+- Nullable types: e.g., `sql.NullInt64`
+- Custom mapped types (e.g., JSON) via config
+- Associations modeled as struct fields or slices
+
+### Association Helper Types
+- `field.Struct[T]` for single related entity
+- `field.Slice[T]` for one-to-many or many-to-many relations
+
+
+### Typical Usage Patterns
+- Compose multiple predicates with `Where()` using helpers
+- Use `Set()` with setters to update or create
+- Perform batch creations or batched linking for associations
+
+---
+
+## 2. Using Field Helpers for Filtering
+
+### Basic Predicates
+Use helper fields to build WHERE clauses effortlessly:
+
+```go
+// Find users over 18 with active role
+var users []models.User
+if err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx, &users); err != nil {
+    // handle error
+}
+```
+
+### Nullable and Custom Types
+Helpers support null checks and custom comparisons:
+
+```go
+// Filter users where Score IS NULL
+usersWithNoScore, _ := gorm.G[models.User](db).
+    Where(generated.User.Score.IsNull()).
+    Find(ctx)
+
+// Filter JSON profile where 'vip' flag is true
+vipUser, err := gorm.G[models.User](db).
+    Where(generated.User.Profile.Equal("$.vip", true)).
+    Take(ctx)
+```
+
+### Combining Conditions
+Helpers naturally support combining with ANDs, ORs via GORM:
+
+```go
+// Multiple AND conditions
+gorm.G[models.User](db).
+    Where(generated.User.Name.Like("%john%"), generated.User.IsAdult.Eq(true)).
+    Find(ctx)
+```
+
+---
+
+## 3. Updating Records Using Field Helpers
+
+### Setting Field Values
+Use `.Set()` on fields within `Set(...)` calls for precise, type-safe updates:
+
+```go
+// Update user role from pending to active
+rowsUpdated, err := gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Set(generated.User.Role.Set("active")).
+    Update(ctx)
+
+// Check number of affected rows
+fmt.Printf("Updated %d rows\n", rowsUpdated)
+```
+
+### Zero Values and Nullables
+Helpers handle zero values and nulls explicitly:
+
+```go
+// Set zero string, false bool, and NULL for score
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Set(
+        generated.User.Role.Set("").
+        generated.User.IsAdult.Set(false),
+        generated.User.Score.Set(sql.NullInt64{}),
+    ).
+    Update(ctx)
+```
+
+### Using SQL Expressions
+Set fields with complex expressions using `.SetExpr()` or shortcut setters like `.Incr()`:
+
+```go
+// Increment age by 1 for user named bob
+gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(
+        generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{1}}),
+    ).
+    Update(ctx)
+
+// Use .Incr() helper directly
+gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(generated.User.Age.Incr(3)).
+    Update(ctx)
+```
+
+### String Value Transformations
+Use built-in assigners such as `.Upper()` to modify string fields:
+
+```go
+// Set user name to uppercase
+gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Set(generated.User.Name.Upper()).
+    Update(ctx)
+```
+
+---
+
+## 4. Managing Associations with Model Field Helpers
+
+Model-driven helpers support rich association management reflecting your GORM associations.
+
+### Supported Operations
+- **Create**: Insert and associate a new related row
+- **Update**: Update related rows matching conditions
+- **Unlink**: Remove association links (nullify FK or remove join table rows)
+- **Delete**: Delete associated rows (or join rows in many2many)
+- **CreateInBatch**: Batch create and link multiple related rows
+
+### Examples
+#### Creating with Associations
+```go
+// Create user and a new pet
+gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+    ).
+    Create(ctx)
+
+// Create user and batch link languages (many2many)
+gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("polyglot"),
+        generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+    ).
+    Create(ctx)
+```
+
+#### Updating Associations
+```go
+// Update user's pet named "fido" to "rex"
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(
+        generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex")),
+    ).
+    Update(ctx)
+```
+
+#### Unlinking and Deleting Associations
+```go
+// Unlink all user pets (sets foreign keys to NULL)
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Unlink()).
+    Update(ctx)
+
+// Delete all user's pets (removes the records)
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Delete()).
+    Update(ctx)
+
+// Unlink pets named 'fido' only
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Unlink()).
+    Update(ctx)
+```
+
+### Semantics by Association Type
+| Association | Unlink Effect | Delete Effect |
+|-------------|---------------|---------------|
+| Belongs To  | Sets parent FK to NULL | Deletes associated rows |
+| Has One / Has Many | Sets child FK to NULL | Deletes child rows |
+| Many2Many  | Removes join table rows only | Removes join table rows only |
+
+### Parent Operations
+- `Create(ctx)` inserts new parent rows and applies association ops
+- `Update(ctx)` updates matched parents and applies association ops
+
+---
+
+## 5. Best Practices and Tips
+
+- **Always use generated field helpers** to ensure type safety and avoid errors with magic strings.
+- **Combine multiple predicates with `.Where()`** instead of concatenating strings.
+- **Use `.Set()` chaining to construct complex or batch updates cleanly**.
+- **Apply null or zero value updates explicitly using helpers** to prevent unintentional omissions.
+- **Explore custom field mappings** (e.g., JSON) via generator config to handle special types.
+- **Use association helpers to maintain relational integrity** and avoid manual FK manipulation.
+
+---
+
+## 6. Common Pitfalls and Troubleshooting
+
+<AccordionGroup title="Common Issues and Solutions">
+<Accordion title="Generated Helpers Not Found or Import Issues">
+Ensure you have run the generator with the correct input directory and output path. Check that the generated package is properly imported in your code.
+</Accordion>
+<Accordion title="Zero Value Fields Not Updating">
+Remember to use `.Set()` with zero values explicitly in update operations. Omitting these setters may cause fields to be ignored.
+</Accordion>
+<Accordion title="Custom Type Fields Not Generating Helpers Correctly">
+Verify your `genconfig.Config` includes correct `FieldNameMap` or `FieldTypeMap` entries for your custom types (e.g., JSON). Without mapping, the generator uses fallback generic fields.
+</Accordion>
+<Accordion title="Association Operations Not Applying as Expected">
+Confirm you are using the association `.Create()`, `.Update()`, `.Unlink()`, `.Delete()` helpers on correct association fields. Also ensure `Where()` filters on associations are accurate.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 7. Additional Resources and Next Steps
+
+- **Using Generated APIs Guide**: Learn how to combine field helpers with query interfaces effectively ([Using the Generated APIs](https://docs.gorm.io/guides/getting-started/first-generation/using-generated-code))
+- **Working with Associations**: Deep dive into association helper usage ([Working with Associations](https://docs.gorm.io/guides/practical-usage-patterns/working-with-associations))
+- **Custom Field Type Mapping**: How to define and use custom helpers like JSON ([Mapping and Handling Custom Field Types](https://docs.gorm.io/guides/customization-advanced/json-field-mapping))
+- **Template DSL Usage**: Compose complex SQL templates with GORM CLI ([SQL Template DSL in Practice](https://docs.gorm.io/guides/practical-usage-patterns/template-dsl-patterns))
+
+For detailed, working examples, check out the generated `examples/output/models_field_helpers_test.go` in the official repository.
+
+---
+
+*Leverage model-driven field helpers to write cleaner, safer, and more expressive database operations while reducing boilerplate and runtime errors. Harness full compile-time power for your GORM models and associations.*
