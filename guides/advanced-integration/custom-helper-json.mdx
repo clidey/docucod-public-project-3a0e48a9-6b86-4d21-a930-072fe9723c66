@@ -1,0 +1,244 @@
+---
+title: "Custom Field Helpers: JSON Mapping and Beyond"
+description: "Follow a concrete example of mapping a custom field helper (like JSON) to a model field, including generator configuration and multi-database support. Build your own field logic for complex data types and extend patterns for other custom cases."
+---
+
+# Custom Field Helpers: JSON Mapping and Beyond
+
+## Overview
+
+This guide walks you through creating and mapping custom field helpers, focusing on a concrete example of a JSON helper type. You will learn how to configure your generator to use custom helpers for model fields, define specialized query predicates for complex data types like JSON, and extend these patterns to support multiple database dialects. This empowers you to write expressive, type-safe, and database-aware queries in your Go applications leveraging GORM CLI.
+
+---
+
+## 1. What You'll Achieve
+
+- Map a custom JSON field helper to specific model fields via generator configuration.
+- Implement a JSON field helper struct with database-specific SQL generation for JSON predicates.
+- Create advanced query methods using your JSON helpers in your domain models.
+- Support multi-database SQL generation that adapts to MySQL, SQLite, and PostgreSQL.
+
+### Prerequisites
+
+- Basic familiarity with Go and GORM CLI code generation concepts.
+- A model struct with fields tagged for custom generation.
+- GORM CLI installed and ready for code generation.
+
+### Expected Outcome
+
+By completing this guide, you will be able to extend GORM CLI to understand and generate code for complex field types like JSON, resulting in type-safe query APIs that generate correct SQL expressions tailored for your database.
+
+### Time Estimate
+
+Approximately 20-30 minutes to complete the example and experiment with modifications.
+
+### Difficulty Level
+
+Intermediate: Requires understanding of Go struct tags, GORM CLI generation configuration, and some SQL knowledge.
+
+---
+
+## 2. Step-by-Step Instructions
+
+### Step 1: Define Your Custom JSON Field Helper
+
+The custom helper encapsulates JSON operations and leverages GORM clause expressions for database-specific SQL.
+
+```go
+package examples
+
+import (
+	"encoding/json"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+// JSON defines a custom field helper for JSON columns.
+type JSON struct {
+	column clause.Column
+}
+
+// WithColumn sets the column name for the JSON helper.
+func (j JSON) WithColumn(name string) JSON {
+	c := j.column
+	c.Name = name
+	return JSON{column: c}
+}
+
+// Equal constructs a JSON path equality expression, adjusting SQL to the database dialect.
+func (j JSON) Equal(path string, value any) clause.Expression {
+	return jsonEqualExpr{col: j.column, path: path, val: value}
+}
+
+type jsonEqualExpr struct {
+	col  clause.Column
+	path string
+	val  any
+}
+
+func (e jsonEqualExpr) Build(builder clause.Builder) {
+	if stmt, ok := builder.(*gorm.Statement); ok {
+		switch stmt.Dialector.Name() {
+		case "mysql":
+			v, _ := json.Marshal(e.val)
+			clause.Expr{SQL: "JSON_EXTRACT(?, ?) = CAST(? AS JSON)", Vars: []any{e.col, e.path, string(v)}}.Build(builder)
+		case "sqlite":
+			clause.Expr{SQL: "json_valid(?) AND json_extract(?, ?) = ?", Vars: []any{e.col, e.col, e.path, e.val}}.Build(builder)
+		default:
+			clause.Expr{SQL: "jsonb_extract_path_text(?, ?) = ?", Vars: []any{e.col, e.path[2:], e.val}}.Build(builder)
+		}
+	}
+}
+
+// Contains builds a JSON containment predicate (example for MySQL).
+func (j JSON) Contains(value any) clause.Expression {
+	return clause.Expr{SQL: "JSON_CONTAINS(?, ?)", Vars: []any{j.column, value}}
+}
+```
+
+### Step 2: Configure GORM CLI Generator to Use Your Custom Helper
+
+In your generation configuration, map any fields tagged with `gen:"json"` or named `json` to the `JSON` helper type:
+
+```go
+package examples
+
+import (
+	"gorm.io/cli/gorm/field"
+	"gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+	OutPath: "examples/output",
+	FieldNameMap: map[string]any{
+		"json": JSON{},  // Map json-tagged fields to our custom JSON helper
+	},
+}
+```
+
+This configuration ensures all struct fields with `gen:"json"` are generated using your `JSON` helper type.
+
+### Step 3: Annotate Your Model Fields with the Custom Tag
+
+Add the `gen:"json"` tag to fields in your model structs that you want to be handled by the JSON helper.
+
+```go
+package models
+
+type User struct {
+	ID      uint
+	Name    string
+
+	// Use gen tag to assign JSON helper
+	Profile string `gen:"json"`
+}
+```
+
+This tells the generator to treat the `Profile` field as a JSON helper.
+
+### Step 4: Generate Your Code
+
+Run the GORM CLI generator targeting your source package with the `genconfig.Config` defined.
+
+```bash
+gorm gen -i ./examples -o ./examples/output
+```
+
+The generator will produce type-safe helpers like `generated.User.Profile` with your custom JSON methods.
+
+### Step 5: Use Your JSON Helper in Queries
+
+Now you can write expressive, type-safe queries using your JSON helper's methods that generate SQL following the dialect of your database.
+
+```go
+// Assume `db` is your *gorm.DB instance
+import (
+	"gorm.io/gorm"
+	"gorm.io/cli/gorm/generated"
+	"context"
+)
+
+ctx := context.Background()
+
+// Query users whose JSON profile VIP flag is true
+user, err := generated.User(db).
+	Where(generated.User.Profile.Equal("$.vip", true)).
+	Take(ctx)
+
+if err != nil {
+	// handle error
+}
+
+// `user` contains the matched record
+```
+
+Your SQL will automatically adapt, such as:
+- MySQL: `JSON_EXTRACT(profile, "$..vip") = CAST("true" AS JSON)`
+- SQLite: `json_valid(profile) AND json_extract(profile, "$..vip") = 1`
+- PostgreSQL: `jsonb_extract_path_text(profile, "vip") = true`
+
+---
+
+## 3. Extending and Advanced Usage
+
+### Support Multiple Databases
+
+The `Build` method in your custom helper can use the current `builder`'s dialect to generate database-specific SQL, as shown.
+
+### Adding More Custom Predicates
+
+You can add additional JSON-related predicates and mutators on the JSON helper struct to support more complex queries, such as containment, existence checks, or path updates.
+
+### Using Custom Helpers Beyond JSON
+
+The pattern here applies to any complex/custom field - define a field helper type, implement `WithColumn` and relevant predicate functions, then map fields by name or Go type in your generator config.
+
+### File-Level vs Package-Level Config
+
+You can define the `genconfig.Config` at file or package level depending on your project structure. This config is automatically picked up by GORM CLI.
+
+---
+
+## 4. Troubleshooting & Tips
+
+<Tip>
+If your custom field helper methods do not generate expected SQL, verify:
+- Your `WithColumn` method correctly assigns the column name.
+- The `Build` method properly handles all dialect cases.
+- Your `genconfig.Config` is loaded by the generator and correctly maps fields.
+- You are running the generator with the right input path and outputs are updated.
+</Tip>
+
+<Warning>
+Avoid defining complex SQL logic inline in your query interfaces method comments for JSON operations. Instead, encapsulate this logic within your custom field helper methods to isolate complexity.
+</Warning>
+
+<Check>
+After generation:
+- Review generated code under `examples/output` to ensure your JSON helper is injected into models.
+- Use context-aware `Where` queries to safely pass JSON path and values.
+</Check>
+
+---
+
+## 5. Next Steps & Related Guides
+
+- Explore [Model Field Helpers: Filters, Updates, and Predicates](/guides/query-and-model-helpers/model-driven-field-helpers) for broader usage of generated helpers.
+- Learn about [Interface-Driven Query APIs: From Template to Usage](/guides/query-and-model-helpers/interface-driven-queries) to combine custom helpers with complex query interfaces.
+- Consult [Basic Configuration](/getting-started/initial-configuration-and-first-use/basic-configuration) to master generator config struct.
+- Dive into [SQL Template DSL: Conditional Logic and Dynamic Queries](/guides/query-and-model-helpers/template-dsl-tutorial) to create advanced query methods using DSL with your helpers.
+
+---
+
+## Summary
+
+This page focused exclusively on mapping custom field helpers, like a JSON helper, showing you how to:
+- Define your field helper struct with multi-dialect SQL building.
+- Configure GORM CLI to use the helper via field tags.
+- Annotate your model fields to leverage the helper.
+- Generate and query with your custom helpers in a type-safe manner.
+
+This approach unlocks extending GORM CLI to handle complex, domain-specific field types robustly and cleanly.
+
+---
