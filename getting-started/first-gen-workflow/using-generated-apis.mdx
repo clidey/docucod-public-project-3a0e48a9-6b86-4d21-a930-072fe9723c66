@@ -1,0 +1,318 @@
+---
+title: "Using the Generated APIs"
+description: "See how to consume the generated code for queries and updates. Realistic examples let you run a full read/write workflow using the new fluent APIs."
+---
+
+# Using the Generated APIs
+
+Welcome to your first hands-on guide for consuming the **generated code** produced by GORM CLI. This page walks you through how to effectively use the newly generated **type-safe query APIs** and **model-driven field helpers** to perform realistic database operations including querying, creating, updating, and managing associations. You'll experience a complete read/write workflow using fluent, discoverable APIs built on your existing Go GORM project.
+
+---
+
+## 1. Overview: What You Will Achieve
+
+Imagine you have just generated GORM query APIs and field helpers by running `gorm gen` on your annotated Go interfaces and models. Your goal now is to start using these generated APIs to:
+
+- Retrieve data with type safety and clear method calls
+- Filter queries using generated field predicates
+- Create and update database records using strongly typed setters
+- Manipulate complex associations with ease
+
+By following this guide's examples, you will confidently incorporate the generated code into your Go application, gaining the benefits of compile-time safety and fluent querying.
+
+## 2. Getting Started: Importing Generated Code
+
+Make sure your project imports the generated package where the code was generated. For example, if you generated your code into `generated` package inside your module:
+
+```go
+import (
+  "context"
+  "gorm.io/gorm"
+  "your_module/generated" // Adjust based on your output path
+  "your_module/models"    // Your model package
+)
+```
+
+The generated package exposes:
+
+- Query API constructors like `generated.Query[User](db)`
+- Field helpers accessible as static structs like `generated.User.Name` or `generated.User.Pets`
+
+
+---
+
+## 3. Querying Data Using Generated APIs
+
+### 3.1 Running a Type-Safe Query
+
+Each generated query interface method corresponds to a raw SQL template defined in your Go interface comments. Below shows a retrieval example using a generated `GetByID` query for a `User` model:
+
+```go
+// ctx is your standard context.Context
+u, err := generated.Query[models.User](db).GetByID(ctx, 123)
+if err != nil {
+  // Handle not found or other errors
+}
+fmt.Println("User:", u)
+```
+
+This call generates a SQL like:
+
+```sql
+SELECT * FROM users WHERE id=123 AND name = "@name" -- with actual bindings applied
+```
+
+### 3.2 Filtering with Field Predicates
+
+You can compose filters with generated field helpers. For example:
+
+```go
+users, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18)).
+  Where(generated.User.Role.Like("admin%"))
+  .Find(ctx)
+if err != nil {
+  // handle error
+}
+```
+
+This constructs a SQL with conditions like:
+
+```sql
+WHERE age > 18 AND role LIKE 'admin%'
+```
+
+### 3.3 Using Generated Fluent Filter Methods
+
+Some generated query interfaces have convenience methods:
+
+```go
+users, err := generated.Query[models.User](db).
+  FilterByNameAndAge(ctx, "jinzhu", 25).Find(ctx)
+```
+
+These methods use SQL templates to apply complex filters in one call.
+
+---
+
+## 4. Creating and Updating Data
+
+### 4.1 Creating a New Record
+
+Use the `gorm.G[T](db)` generic constructor combined with `Set(...)` to specify field values.
+
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Age.Set(30),
+    generated.User.IsAdult.Set(true),
+  ).Create(ctx)
+
+if err != nil {
+  // handle error
+}
+```
+
+- The `Set` method accepts field setter helpers to assign column values.
+- Zero values and expressions supported (such as `Incr`, `SetExpr`).
+
+### 4.2 Updating Existing Records
+
+Updates work similarly but require specifying a `Where` condition to identify the targets:
+
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(42)).
+  Set(
+    generated.User.Name.Set("bob"),
+    generated.User.Age.Incr(1), // increment age by 1
+  ).Update(ctx)
+
+if err != nil {
+  // handle error
+}
+```
+
+### 4.3 Using Generated Query Interface Update Methods
+
+Alternatively use the `UpdateInfo` method from your generated query interface for complex updates:
+
+```go
+err := generated.Query[models.User](db).UpdateInfo(ctx, models.User{Name: "bob", Age: 27}, 42)
+if err != nil {
+  // handle error
+}
+```
+
+This method leverages your annotated SQL update templates for custom update logic.
+
+---
+
+## 5. Managing Associations with Helpers
+
+The generated model structs offer powerful association helpers for copying the relationships defined in your GORM models.
+
+### Supported Operations
+
+| Operation    | Description                                          |
+| ------------ | ---------------------------------------------------- |
+| Create       | Create and link a related record                      |
+| CreateInBatch| Batch create/link multiple related records            |
+| Update       | Update associated rows matching optional filters     |
+| Unlink       | Remove links without deleting rows (clears FK/join)  |
+| Delete       | Delete associated rows (often join table rows only)  |
+
+### 5.1 Example: Creating Related Records
+
+Create a new user with an associated pet:
+
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).Create(ctx)
+
+if err != nil {
+  // handle error
+}
+```
+
+### 5.2 Example: Updating Associated Rows
+
+Update pets with name "fido" for a user:
+
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+      Update(generated.Pet.Name.Set("rex")),
+  ).Update(ctx)
+
+if err != nil {
+  // handle error
+}
+```
+
+### 5.3 Unlinking and Deleting Associations
+
+To unlink pets (remove association but keep pets):
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+To delete associated pets completely:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+```
+
+### 5.4 Common Patterns
+
+- **BelongsTo**: Unlink sets FK to `NULL`; Delete removes the related row
+- **HasMany/HasOne**: Unlink sets child FK to `NULL`; Delete removes child rows
+- **Many2Many**: Unlink/Delete remove join rows only, preserving parent and child rows
+
+### 5.5 Batch Creating Associations
+
+Attach multiple languages in one batch:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}})).
+  Update(ctx)
+```
+
+---
+
+## 6. Using Template-Based Queries
+
+Your query interfaces support embedded SQL templates with dynamic placeholders, letting you write flexible custom queries bound to Go parameters.
+
+Example method call:
+
+```go
+user, err := generated.Query[models.User](db).QueryWith(ctx, models.User{ID: 123})
+```
+
+This executes SQL that conditionally uses user ID or name for filtering based on your SQL template logic.
+
+Template directives (like `{{where}}`, `{{set}}`, `@@table`, `@param`) allow you to express flexible SQL in interface comments, automatically converted into safe, type-checked method implementations.
+
+---
+
+## 7. Tips and Best Practices
+
+- Always handle errors on queries and updates to avoid unexpected panics.
+- Use `context.Context` appropriately to control cancellation and deadlines.
+- Leverage field helpers for writing clear, type-safe predicates — avoid raw strings in filters.
+- Use `CreateInBatch` for efficiency when creating multiple associations.
+- Explore your generated query interfaces to understand all available methods.
+- Integrate unit tests by mocking DB operations at the GORM level.
+
+---
+
+## 8. Troubleshooting Common Issues
+
+<Accordion title="Common Issues and Solutions">
+
+<Accordion title="Error: Method not found on generated API">
+Make sure you have regenerated the code after modifying your interfaces or models. Run:
+
+```bash
+gorm gen -i ./your_input_path -o ./generated
+```
+
+Check that your import paths align with the generated code.
+</Accordion>
+
+<Accordion title="Query returns 'record not found' unexpectedly">
+Verify the filter criteria and that data exists in the database. Use simple predicates first to narrow the cause.
+</Accordion>
+
+<Accordion title="Association update doesn't behave as expected">
+Ensure you are using `Set` with the correct association helper and that your GORM model associations are properly configured.
+</Accordion>
+
+<Accordion title="Panic or compilation errors related to type mismatch">
+Check your interface method signatures and ensure they return the expected types: data (optional) followed by error.
+</Accordion>
+
+</Accordion>
+
+---
+
+## 9. Next Steps
+
+- Explore the `Define Models and Query Interfaces` guide to refine your models and interface definitions.
+- Learn about advanced Association Operations for deep relational use cases.
+- Read the `Template-Based Queries and SQL DSL` guide to master flexible query writing.
+- Review the `Troubleshooting Common Issues` page for resolution of setup and runtime problems.
+
+
+---
+
+# Quick Reference CLI Example
+
+```bash
+# Generate code from your Go interface and model packages
+gorm gen -i ./examples -o ./generated
+
+# In your app, import generated and models packages, then:
+```
+
+---
+
+This completes your practical introduction to using the generated type-safe query APIs and model field helpers with GORM CLI. You now have the tools and confidence to implement robust, maintainable, and safe data access layers in your Go applications.
+
+---
