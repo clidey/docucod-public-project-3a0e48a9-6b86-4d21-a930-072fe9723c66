@@ -1,0 +1,314 @@
+---
+title: "Writing and Using SQL Templates"
+description: "Unlock advanced querying with GORM CLI's SQL templating DSL. This guide explains template directives, dynamic binding, and real-world patterns to create flexible, robust queries from Go interfaces."
+---
+
+# Writing and Using SQL Templates
+
+Unlock advanced querying with GORM CLI's powerful SQL templating DSL. This guide will help you write expressive, dynamic queries within your Go interface method comments, enabling flexible, type-safe SQL generation tailored precisely to your business logic.
+
+---
+
+## 1. Introduction to SQL Templates
+
+GORM CLI empowers developers to embed SQL templates directly inside Go interface method comments. These templates use simple yet expressive directives for placeholder substitution, dynamic conditions, and iteration over collections — all generating ready-to-use, type-safe SQL code behind the scenes.
+
+### What You Will Learn Here
+- How to embed raw SQL and dynamic SQL blocks using template directives
+- How parameters in method signatures bind to SQL placeholders automatically
+- How to leverage conditional `where` and `set` blocks for flexible query construction
+- Real-world SQL template patterns for update, filtering, and complex queries
+
+### Prerequisites
+- Familiarity with Go interfaces and method comments
+- Defined Go models corresponding to your database tables
+- Basic understanding of SQL query syntax
+
+### Outcome
+By mastering SQL templating, you will:
+- Write concise and maintainable SQL queries with dynamic filters
+- Generate type-safe implementations without manually composing SQL strings
+- Increase productivity and reduce runtime errors
+
+---
+
+## 2. SQL Template Directive Reference
+
+GORM CLI's SQL templates support several key directives. Use these to turn static SQL into flexible, composable queries.
+
+| Directive      | Purpose                                                             | Example
+|----------------|---------------------------------------------------------------------|-----------------------------|
+| `@@table`      | Inserts the table name mapped from your model                      | `SELECT * FROM @@table WHERE id=@id`
+| `@@column`     | Dynamically bind a column name (string param)                      | `WHERE @@column=@value`
+| `@param`       | Bind method parameters as SQL parameters for safe bindings         | `WHERE name=@user.Name`
+| `{{where}}`    | Wraps conditionally included `WHERE` clauses                       | `{{where}} age>18 {{end}}`
+| `{{set}}`      | Wraps conditionally included `SET` clauses for update statements   | `{{set}} name=@name {{end}}`
+| `{{if}}`       | Use inside blocks for conditional SQL fragments                    | `{{if age>0}}AND age=@age{{end}}`
+| `{{for}}`      | Iterate over collections to build repeated clauses                 | `{{for _, tag := range tags}} ... {{end}}`
+
+#### Notes on Placeholder Bindings
+- `@@table` is replaced with the actual SQL table name of the model.
+- `@@column` expects a string parameter that is substituted as a column identifier.
+- `@param` placeholders map exactly to method parameters, allowing direct substitution.
+
+---
+
+## 3. Writing Your First SQL Template
+
+Let's walk through crafting a simple query method using SQL templates.
+
+### Example: Query by ID
+```go
+// In your query interface:
+// SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (T, error)
+```
+
+**What happens?**
+- `@@table` resolves to the model's table name.
+- `@id` binds the `id` method parameter as a query parameter to prevent injection.
+
+### Generated SQL snippet in Go:
+```go
+var sb strings.Builder
+params := make([]any, 0, 2)
+sb.WriteString("SELECT * FROM ? WHERE id=?")
+params = append(params, clause.Table{Name: clause.CurrentTable}, id)
+```
+
+### Usage example:
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+```
+Result: a safe, parameterized query fetching the user with id=123.
+
+---
+
+## 4. Dynamic SQL with Conditional Blocks
+
+To compose queries based on parameters that may or may not be set, use `{{where}}` and `{{if}}` blocks.
+
+### Example: Filter users by optional fields
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{if user.Name != ""}} name=@user.Name {{end}}
+//   {{if user.Age > 0}} AND age=@user.Age {{end}}
+// {{end}}
+SearchUsers(user User) ([]T, error)
+```
+
+### How it generates:
+- Wraps all conditions in a single `WHERE` clause only if any sub-condition applies.
+- Trims leading `AND` or `OR` connectors to produce valid SQL.
+
+### Generated snippet example:
+```go
+var sb strings.Builder
+params := make([]any, 0, 2)
+sb.WriteString("SELECT * FROM ?")
+params = append(params, clause.Table{Name: clause.CurrentTable})
+{
+	var tmp strings.Builder
+	if user.Name != "" {
+		tmp.WriteString(" name=? ")
+		params = append(params, user.Name)
+	}
+	if user.Age > 0 {
+		tmp.WriteString(" AND age=? ")
+		params = append(params, user.Age)
+	}
+	c := strings.TrimSpace(tmp.String())
+	if c != "" {
+		reTrim := regexp.MustCompile(`(?i)^\s*(?:and|or)\s+|\s+(?:and|or)\s*$`)
+		c = reTrim.ReplaceAllString(c, "")
+		sb.WriteString(" WHERE ")
+		sb.WriteString(c)
+	}
+}
+```
+
+This pattern lets your queries adapt their filters based on runtime parameter values.
+
+---
+
+## 5. Writing Dynamic Update Queries Using `{{set}}`
+
+Updating records can also leverage conditional `{{set}}` blocks for only updating relevant fields.
+
+### Example: Update user info conditionally
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age, {{end}}
+//   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateInfo(user User, id int) error
+```
+
+### Key behavior:
+- Append fields to SET only if condition is true
+- Handles `else` condition for setting `is_adult` flag
+- Automatically trims trailing commas
+
+---
+
+## 6. Looping Over Collections
+
+Use `{{for}}` blocks to write queries involving arrays or slices.
+
+### Example: Filter with multiple users
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{for _, user := range users}}
+//     {{if user.Name != "" && user.Age > 0}}
+//       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+//     {{end}}
+//   {{end}}
+// {{end}}
+Filter(users []User) ([]T, error)
+```
+This example dynamically constructs a complex WHERE clause by combining each user's filters with OR operators.
+
+---
+
+## 7. Parameter Binding Details
+
+GORM CLI automatically generates Go code that safely binds all `@param` placeholders as SQL parameters using GORM's `clause.Column`, `clause.Table`, and parameter arrays. This approach guarantees query safety by avoiding direct interpolation and injection risk.
+
+---
+
+## 8. Template Comment Formatting Rules
+
+- SQL templates live inside Go method doc comments immediately preceding the method signature.
+- Use standard Go comment syntax with `//`.
+- Preserve indentation to maintain readability.
+- Special characters like `@` can be escaped with `\@` to avoid substitution.
+
+### Example with `@` escaping
+```go
+// SELECT * FROM @@table WHERE id=@id AND name = "\@name"
+GetByID(id int) (T, error)
+```
+
+---
+
+## 9. Context Handling
+
+If a method does not declare `ctx context.Context` as a parameter, GORM CLI inserts it automatically in the generated code ensuring all generated queries can accept a context.
+
+---
+
+## 10. Common SQL Templating Patterns
+
+### Dynamic column filtering
+```go
+// SELECT * FROM @@table WHERE @@column=@value
+FilterWithColumn(column string, value string) (T, error)
+```
+
+### Time range filtering
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{if !start.IsZero()}} created_at > @start {{end}}
+//   {{if !end.IsZero()}} AND created_at < @end {{end}}
+// {{end}}
+FilterWithTime(start, end time.Time) ([]T, error)
+```
+
+---
+
+## 11. Troubleshooting & Tips
+
+<AccordionGroup title="Common Issues and Solutions">
+<Accordion title="SQL Template Parsing Errors">
+Check that your directives (`{{where}}`, `{{set}}`, `{{if}}`, `{{end}}`) are balanced and correctly closed. Missing `{{end}}` will cause generation failures.
+</Accordion>
+<Accordion title="Incorrect Parameter Binding">
+Verify that parameter names exactly match placeholders (case sensitive) and that parameters are included in method signatures.
+</Accordion>
+<Accordion title="Escaping Special Characters">
+Use `\@` to escape literal '@' characters in your SQL comments to avoid accidental binding.
+</Accordion>
+</AccordionGroup>
+
+### Best Practices
+- Use `{{where}}` blocks to avoid manual insertion of `WHERE` keyword and redundant `AND/OR` logic.
+- Prefer `{{set}}` for updates to avoid setting zero values unintentionally.
+- Validate generated code compilation and run queries in a test environment before deploying.
+- Keep templates readable and well-indented for maintenance.
+
+---
+
+## 12. Next Steps & Related Content
+
+- [Using the Generated APIs in Your Application](/guides/core-workflows/using-generated-apis) — Learn to integrate and invoke your generated query methods.
+- [Customizing Code Generation with genconfig](/guides/advanced-usage/customizing-generation) — Advanced control over the generation pipeline.
+- [Handling Associations with Helpers](/guides/core-workflows/association-guides) — Manage complex model relations safely.
+- [Defining Models & Query Interfaces](/getting-started/your-first-code-generation/defining-models-interfaces) — Start from structure and interface definitions.
+
+Explore the rich feature set GORM CLI provides and maximize your development speed with confidence.
+
+---
+
+### Example Complete Interface
+```go
+package examples
+
+type Query[T any] interface {
+	// SELECT * FROM @@table WHERE id=@id
+	GetByID(id int) (T, error)
+
+	// SELECT * FROM @@table WHERE @@column=@value
+	FilterWithColumn(column string, value string) (T, error)
+
+	// SELECT * FROM @@table
+	// {{where}}
+	//   {{if user.ID > 0}}
+	//       WHERE id=@user.ID
+	//   {{else if user.Name != ""}}
+	//       WHERE name=@user.Name
+	//   {{end}}
+	// {{end}}
+	QueryWith(user User) (T, error)
+
+	// UPDATE @@table
+	// {{set}}
+	//   {{if user.Name != ""}} name=@user.Name, {{end}}
+	//   {{if user.Age > 0}} age=@user.Age, {{end}}
+	//   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+	// {{end}}
+	// WHERE id=@id
+	UpdateInfo(user User, id int) error
+
+	// SELECT * FROM @@table
+	// {{where}}
+	//   {{for _, user := range users}}
+	//     {{if user.Name != "" && user.Age > 0}}
+	//       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+	//     {{end}}
+	//   {{end}}
+	// {{end}}
+	Filter(users []User) ([]T, error)
+
+	// where("name=@name AND age=@age")
+	FilterByNameAndAge(name string, age int)
+
+	// SELECT * FROM @@table
+	// {{where}}
+	//   {{if !start.IsZero()}}
+	//     created_at > @start
+	//   {{end}}
+	//   {{if !end.IsZero()}}
+	//     AND created_at < @end
+	//   {{end}}
+	// {{end}}
+	FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+---
