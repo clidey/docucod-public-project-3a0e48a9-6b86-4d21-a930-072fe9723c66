@@ -1,0 +1,277 @@
+---
+title: "Example Use Cases"
+description: "Showcases real-world problems GORM CLI solves, with representative code snippets for basic fields and association workflows. Demonstrates how to streamline CRUD operations and advanced queries, emphasizing the fluent and discoverable API surface."
+---
+
+# Example Use Cases
+
+Explore how GORM CLI enables you to solve real-world database interaction problems with clear, maintainable, and type-safe code. This guide showcases representative examples demonstrating basic field operations, complex filtering, updating workflows, and advanced association management—all using GORM CLI's generated APIs and fluent interfaces.
+
+---
+
+## Streamlining CRUD Operations with Fluent APIs
+
+GORM CLI transforms your Go interfaces and models into generation-driven APIs that simplify common CRUD operations:
+
+### Retrieving Records by ID
+Fetch records safely and succinctly using typed `GetByID` methods generated directly from your query interfaces.
+
+```go
+user, err := generated.Query[models.User](db).GetByID(ctx, 123)
+if err != nil {
+  // handle error
+}
+```
+
+The `GetByID` method executes a template-based query equivalent to:
+
+```sql
+SELECT * FROM users WHERE id = @id AND name = "\@name"
+```
+
+*Note:* The method is generated from your SQL-templated interface method, providing compile-time safety with minimal boilerplate.
+
+### Flexible Filtering with Dynamic Columns
+Use `FilterWithColumn` to query by any column dynamically while leveraging type safety:
+
+```go
+user, err := generated.Query[models.User](db).FilterWithColumn(ctx, "role", "admin")
+```
+
+This translates to:
+
+```sql
+SELECT * FROM users WHERE role = @value
+```
+
+### Complex Filtering via Structs
+GORM CLI supports dynamic query building from struct fields with null-safe and conditional clauses.
+
+```go
+result, err := generated.Query[models.User](db).QueryWith(ctx, models.User{Name: "alice"})
+```
+
+Here, the conditions automatically adapt based on which struct fields are set, resulting in queries like:
+
+```sql
+SELECT * FROM users WHERE name = @user.Name
+```
+
+### Batch Filtering with Multiple Conditions
+Filter over collections of structs with custom logic, combining multiple conditions in a fluent query.
+
+```go
+filters := []models.User{{Name: "alice", Age: 20, Role: "active"}, {Name: "bob", Age: 30, Role: "member"}}
+results, err := generated.Query[models.User](db).Filter(ctx, filters)
+```
+
+Which generates SQL akin to:
+
+```sql
+SELECT * FROM users WHERE (name = @user.Name AND age = @user.Age AND role LIKE concat("%", @user.Role, "%")) OR ...
+```
+
+### Updating Records Conditionally
+Use the generated update methods with conditional SET clauses:
+
+```go
+err := generated.Query[models.User](db).UpdateInfo(ctx, models.User{Name: "charlie", Age: 22}, 123)
+```
+
+This produces an update like:
+
+```sql
+UPDATE users SET name = @Name, age = @Age, is_adult = 1 WHERE id = @id
+```
+
+The generator emits logic that automatically sets `is_adult` based on age, reducing manual error-prone code.
+
+---
+
+## Advanced Querying with Custom SQL Templates
+
+Leverage the full power of SQL templates for complex queries, including custom filtering, conditional expressions, and time range filtering:
+
+### Filtering by Time Ranges
+Query users created within a specific time frame:
+
+```go
+start := time.Now().Add(-24 * time.Hour)
+end := time.Now()
+users, err := generated.Query[models.User](db).FilterWithTime(ctx, start, end)
+```
+
+This translates into dynamically generated SQL:
+
+```sql
+SELECT * FROM users WHERE created_at > @start AND created_at < @end
+```
+
+### Dynamic Conditions Using Template DSL
+Utilize `{{if}}`, `{{for}}`, `{{where}}`, and other directives to fine-tune your SQL logic directly in Go interface comments.
+
+See the example interface method `Filter` in `examples/query.go` for a practical demonstration of iterating over input slices to build SQL conditions dynamically.
+
+---
+
+## Mastering Associations with Generated Helpers
+
+GORM CLI’s model-driven field helpers treat associations as first-class operations, simplifying one-to-one, one-to-many, and many-to-many workflows.
+
+### Creating and Linking Associated Records
+Create a user with related pets or languages in one fluent statement:
+
+```go
+gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+### Batch Creation for Many-to-Many
+Link multiple languages to a user via batch association:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Update(ctx)
+```
+
+### Updating Associated Records
+Update a specific pet for a user with conditions:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex"))).
+  Update(ctx)
+```
+
+### Unlinking and Deleting Associations
+Remove links or delete associated rows safely:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Or delete
+
+gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+```
+
+Using condition filters before unlink/delete is supported to target precisely which associated records you wish to act upon.
+
+---
+
+## JSON Field Handling with Dialect Awareness
+
+GORM CLI supports advanced custom field helpers like JSON that generate SQL tailored per database dialect.
+
+### Defining a JSON Field Helper
+Include the `JSON` type helper in your config and models to enable JSON path querying.
+
+```go
+// Profile field in User model with `gen:"json"` tag
+Profile string `gen:"json"`
+```
+
+### Dialect-aware Queries on JSON Fields
+Query users where a JSON path equals a value, e.g., a "vip" flag:
+
+```go
+user, err := gorm.G[models.User](db).
+  Where(generated.User.Profile.Equal("$.vip", true)).
+  Take(ctx)
+```
+
+Generates MySQL, SQLite, or PostgreSQL-specific JSON queries automatically, ensuring correct behavior across databases.
+
+---
+
+## Best Practices & Troubleshooting
+
+- **Write clean interfaces:** Start with clear SQL templates in your interface methods — type-safe generation ensures correctness.
+- **Use config mappings:** Customize field helpers for special types like SQL `NullTime` or JSON fields.
+- **Test generated code:** Use test utilities in `examples/output/query_test.go` to verify query correctness.
+- **Watch out for zero values:** Conditional clauses within templates handle zero or empty values gracefully.
+- **Leverage association helpers:** Use `Set()`, `Create()`, `Update()`, `Unlink()`, and `Delete()` on association fields for precise database operations.
+
+---
+
+## Further Exploration
+
+- [Feature Highlights](../feature-overview-workflows/feature-spotlight) for deep dive on generators
+- [Quickstart & Basic Workflow](../feature-overview-workflows/quickstart-workflow) to begin generating your own code
+- [Working with Associations](../../guides/advanced-patterns/associations) for extended association patterns
+- [Template-Driven Queries](../../guides/advanced-patterns/template-dsl) for mastering SQL template DSL
+
+---
+
+This page illustrates how to apply GORM CLI’s core capabilities to everyday development tasks, raising your productivity, reducing bugs, and ensuring maintainable, clear database access code.
+
+
+---
+
+## Visual Example: Query and Update Flow
+
+```mermaid
+flowchart TD
+  Start([User Invoke Generated API]) --> QueryMethod[GetByID / FilterWithColumn / QueryWith]
+  QueryMethod -->|Generates SQL with Bindings| SQL[Tailored SQL with Placeholders]
+  SQL --> ExecuteDB[Execute SQL against DB]
+  ExecuteDB -->|Returns Results| Response[Typed Structs Returned]
+
+  UserModifyData([User wants to update data]) --> UpdateMethod[UpdateInfo or Association.Set().Update()]
+  UpdateMethod -->|Generates Conditional SQL SET clause| UpdateSQL[UPDATE ... SET ... WHERE ...]
+  UpdateSQL --> ExecUpdate[Execute Update on DB]
+  ExecUpdate --> UpdateResponse[Success or Error]
+
+  Response --> End([Process Results])
+  UpdateResponse --> End
+```
+
+---
+
+## Code Snippet: Example Query Interface
+
+```go
+package examples
+
+type Query[T any] interface {
+  // GetByID fetches data by ID
+  // SQL: SELECT * FROM @@table WHERE id=@id AND name = "\@name"
+  GetByID(id int) (T, error)
+
+  // FilterWithColumn queries by dynamic column
+  FilterWithColumn(column string, value string) (T, error)
+
+  // QueryWith uses struct fields conditionally
+  QueryWith(user models.User) (T, error)
+
+  // UpdateInfo updates fields conditionally
+  UpdateInfo(user models.User, id int) error
+
+  // Filter combines multiple struct filters
+  Filter(users []models.User) ([]T, error)
+
+  // FilterByNameAndAge convenience method
+  FilterByNameAndAge(name string, age int)
+
+  // FilterWithTime filters by creation time range
+  FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+Use these interfaces as a starting point to generate your type-safe, fluent APIs.
+
+---
