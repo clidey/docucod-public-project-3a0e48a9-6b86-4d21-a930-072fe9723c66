@@ -1,0 +1,254 @@
+---
+title: "Troubleshooting & Common Issues"
+description: "Covers frequently encountered problems during installation, configuration, or initial code generation. Provides actionable debugging tips, error explanations, and quick resolutions."
+---
+
+# Troubleshooting & Common Issues
+
+This guide helps you swiftly diagnose and resolve common problems encountered during installation, configuration, and your initial code generation steps with GORM CLI. Here, you'll find practical tips, error explanations, and clear resolution steps to get you back on track.
+
+---
+
+## 1. Installation Issues
+
+### Problem: `gorm` command not found after installation
+
+This often occurs when Go binaries are installed but the `$GOPATH/bin` or `$HOME/go/bin` directory is not added to your system's `PATH`.
+
+**Solution:**
+
+1. Confirm the Go binary install location:
+   ```bash
+   go env GOPATH
+   ```
+   Typical output is `$HOME/go`.
+
+2. Check if the CLI binary is present:
+   ```bash
+   ls $(go env GOPATH)/bin/gorm
+   ```
+
+3. Add the Go binary directory to your PATH:
+   - On Linux/macOS:`export PATH=$PATH:$(go env GOPATH)/bin`
+   - On Windows (PowerShell):
+     ```powershell
+     $env:Path += ";$(go env GOPATH)\bin"
+     ```
+
+4. Restart your terminal or source your profile file.
+
+5. Verify installation:
+   ```bash
+gorm --version
+```
+
+
+<Tip>
+Ensure you are using Go 1.18 or later, as GORM CLI requires generics support.
+</Tip>
+
+---
+
+### Problem: Go module initialization errors or dependency issues
+
+If you see errors related to missing or incompatible Go modules:
+
+- Verify you are working inside a Go module (`go.mod` file present).
+- Run `go mod tidy` to synchronize dependencies.
+- Confirm your Go environment uses the module cache correctly.
+
+---
+
+## 2. Configuration & Generation Problems
+
+### Problem: No generated code produced or empty output directory
+
+This usually happens when interface or struct filters exclude all targets or the input path is misconfigured.
+
+**Common causes:**
+- The `IncludeInterfaces` or `IncludeStructs` config patterns do not match any source code symbols.
+- `ExcludeInterfaces` or `ExcludeStructs` patterns filter out everything unintentionally.
+- Incorrect input directory passed to `gorm gen`.
+
+**Resolution Steps:**
+
+1. Check your package-level `genconfig.Config` (if any):
+
+   ```go
+   var _ = genconfig.Config{
+       IncludeInterfaces: []any{"Query*"}, // should match your interfaces
+       ExcludeInterfaces: []any{},
+       IncludeStructs:    []any{},
+       ExcludeStructs:    []any{},
+       OutPath:           "generated",  // Optional
+       FileLevel:         false,         // false means config applies to whole package
+   }
+   ```
+
+2. Confirm that the interface and struct names match the patterns exactly (case sensitive, wildcards allowed).
+3. If you have multiple config files, understand that configs apply hierarchically based on file paths.
+4. Ensure the input path to `gorm gen` points to your source files containing interfaces and models.
+
+Example command:
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+<Tip>
+If you're unsure, try removing include/exclude filters temporarily to confirm generation works.
+</Tip>
+
+---
+
+### Problem: Errors parsing interface or struct definitions
+
+Typical failures occur due to:
+- Invalid Go syntax in your source files.
+- Missing or malformed method comments for SQL templates.
+- Interface methods without proper return signatures.
+
+**How to fix:**
+
+1. Verify your Go source compiles cleanly.
+2. Check that interface methods with SQL templates return one or two values, with the last being an `error`.
+
+From `gorm gen` constraints:
+- Methods with raw SQL must return at least one value plus an `error`.
+- Maximum two return values only.
+
+3. Ensure comments with SQL templates are correctly formatted above each method.
+
+Example:
+```go
+// SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (T, error)
+```
+
+---
+
+## 3. Common Code Generation Pitfalls
+
+### Problem: Method signatures modified unexpectedly (context added)
+
+GORM CLI automatically injects a `context.Context` parameter if absent, placing it as the first parameter.
+
+This behavior is by design to enable context propagation for cancellation and deadlines.
+
+If this is undesired in rare cases, explicitly add `ctx context.Context` as the first parameter in your interface method.
+
+---
+
+### Problem: Field helpers missing or unexpected field types
+
+Generated field helper types depend on:
+
+- Go basic types (int, string, bool, etc.)
+- Named types implementing GORM interfaces like `Scanner` or `Valuer`
+- Your custom field mappings declared in `FieldTypeMap` or `FieldNameMap` in the config
+
+**If helpers are missing:**
+
+- Add your custom type mapping in the `genconfig.Config`.
+
+Example:
+```go
+var _ = genconfig.Config{
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+    FieldNameMap: map[string]any{
+        "json": JSON{},
+    },
+}
+```
+
+---
+
+## 4. Debugging Tips
+
+### Step 1: Run a dry-run generation
+
+Use verbose output or logging by running your command with debug environment variables or wrapper scripts to inspect processing.
+
+### Step 2: Check generated files for codegen hints
+
+Files with header:
+```go
+// Code generated by 'gorm.io/cli/gorm'. DO NOT EDIT.
+```
+Are generated by the tool. Missing files might indicate errors.
+
+### Step 3: Validate package and import paths
+
+Ensure your Go packages have valid mod structure, and imports resolve correctly.
+
+### Step 4: Examine error stack traces carefully
+
+The CLI prints detailed error messages signaling parsing or generation problems with source locations.
+
+### Step 5: Isolate error scope
+
+Try generating on a minimal Go source file containing only one interface or model to pinpoint issues.
+
+---
+
+## 5. Troubleshooting Common Error Messages
+
+<AccordionGroup title="Common Error Messages & Their Fixes">
+  <Accordion title="Method X: finish method must return at least one value">
+  This means a method with a raw SQL template did not declare return values appropriately. Fix the method signature to return the data type and an error.
+
+  Example:
+  ```go
+  GetByID(id int) (T, error) // Correct
+  ```
+  </Accordion>
+
+  <Accordion title="Parsing failed, can't parse file X.go">
+  Indicates invalid Go syntax or unsupported constructs in your code. Run `go build` or `go vet` to locate issues.
+  </Accordion>
+
+  <Accordion title="No matching interfaces or structs found">
+  Review your configuration filters. Ensure your `IncludeInterfaces` or `ExcludeStructs` do not eliminate all relevant targets.
+  </Accordion>
+
+  <Accordion title="Unable to load package or struct from external package">
+  Check your Go module and import paths. The generator attempts to load external struct definitions for anonymous embedding or field type mapping.
+  </Accordion>
+
+  <Accordion title="Unknown field type for generation">
+  Add needed types to `FieldTypeMap` or `FieldNameMap` in your configuration for custom handling.
+  </Accordion>
+
+  <Accordion title="Skipping generated file: X.go">
+  The generator ignores files containing the codegen header to avoid infinite loops. Ensure your input files don't contain generated code.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## 6. When to Seek Help
+
+If you have followed all troubleshooting steps but still encounter issues:
+
+- Review the [Troubleshooting & Common Issues](https://gorm.io/cli/gorm/getting-started/first-generation/troubleshooting) documentation again.
+- Visit the official GORM CLI [GitHub repository](https://github.com/go-gorm/cli) to open an issue with detailed error logs and minimal reproducer.
+- Consult related pages such as [Minimal Configuration & Project Setup](../basic-configuration), and [Running Your First Code Generation](../first-generation-command) for correct usage patterns.
+
+
+---
+
+## Additional Resources
+
+- [GORM CLI Installation Guide](../setup-installation/installation)
+- [Validation of Installation](../setup-installation/validation)
+- [Integration Workflow](../../overview/architecture-and-core-concepts/integration-workflow)
+- [Generating Query APIs Example](../../guides/getting-started/generating-query-apis)
+
+
+---
+
+# Summary
+This troubleshooting guide equips you to identify and fix common installation, configuration, and code generation errors with GORM CLI. It covers issues like missing executables, configuration mismatches, method signature errors, and field type mapping challenges, plus detailed error message explanations. Use it to ensure your environment is prepared, your configuration matches your source code, and your generation commands run smoothly so you can harness GORM CLI’s power effectively.
+
+---
