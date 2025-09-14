@@ -1,0 +1,220 @@
+---
+title: "Best Practices and Common Pitfalls"
+description: "Covers recommendations for structuring interfaces and models, making the best use of field helpers, maintaining strong typing, and avoiding common mistakes or anti-patterns. Helps teams scale up usage effectively."
+---
+
+# Best Practices and Common Pitfalls
+
+This guide empowers teams and individual developers to structure their GORM CLI projects effectively by applying proven best practices around interface and model organization, intelligent usage of field helpers, and robust typing. Avoiding common pitfalls will ensure your codebase scales smoothly and remains maintainable.
+
+---
+
+## 1. Why This Guide Matters
+
+Developers working with GORM CLI often start with simple code generation setups but face challenges as the project grows. This document covers actionable recommendations to:
+
+- Organize query interfaces and model structs clearly
+- Harness field helpers for strong typing and expressive queries
+- Ensure consistent naming and mapping strategies
+- Prevent common mistakes that cause generation errors or runtime surprises
+
+By following these guidelines, teams sustain clean, efficient, and robust code generation workflows.
+
+---
+
+## 2. Structuring Interfaces and Models for Scalability
+
+### Keep Interfaces Focused and Named Clearly
+
+- **Name interfaces with clear intent:** Prefix or suffix interface names to indicate their role, e.g., `UserQuery`, `AccountUpdater`, or use `Query` patterns (`UserQuery` over `QueryUser`).
+- **Limit interface scope:** Each interface should represent a bounded set of operations related to a domain concept or aggregate.
+- **Organize interfaces logically by domain or package:** Group related query interfaces together, keeping them near their models for easier navigation.
+- **Leverage include/exclude config filters:** Use `genconfig.Config`'s `IncludeInterfaces` and `ExcludeInterfaces` settings to manage generation scope, filtering deprecated or experimental interfaces cleanly.
+
+### Design Models with Clear Field Semantics
+
+- **Use explicit, full-field names:** Avoid ambiguous or generic names in structs. This is critical as field helpers are generated based on field names and tags.
+- **Annotate custom behaviors with `gen` tags:** For special handling like JSON fields, use struct tags (e.g., `gen:"json"`) and map these correctly via `FieldNameMap` in configuration.
+- **Group associations correctly:** Define `has one`, `has many`, `belongs to`, and `many2many` relationships explicitly with GORM tags; these become association helpers.
+- **Embed anonymous structs judiciously:** Flatten embedded structs only when the resulting combined fields make logical sense for your queries.
+
+### Use Configuration to Control Output Granularity
+
+- **OutPath per package/directories:** Customize output folder organization to mirror project structure, easing navigation and dependency management.
+- **FileLevel option when needed:** Use `FileLevel: true` to restrict generation and configuration scope to single files when working in large modules.
+- **Whitelist over blacklist:** Prefer `IncludeInterfaces` and `IncludeStructs` for explicit scopes rather than relying solely on excludes for predictable builds.
+
+---
+
+## 3. Making the Most of Field Helpers
+
+Field helpers enhance compile-time safety and enable fluent query building. Use them to avoid raw string SQL and error-prone manual bindings.
+
+### Strong Typing for Native and Custom Types
+
+- **Leverage built-in mappings:** Basic Go types like `string`, `int`, `bool`, etc., generate appropriate field helpers automatically.
+- **Map imported or special types:** For types like `sql.NullTime`, or domain custom types, map them in the config’s `FieldTypeMap` to proper helpers like `field.Time{}`.
+- **Custom helpers for special cases:** Implement and register custom field helpers (e.g., `JSON` helper for JSON fields) and associate them via the `gen:""` tags and configuration mapping.
+
+### Correct Usage of Association Helpers
+
+- **Use `field.Struct[T]` for `has one` and `belongs to`:** Strongly typed helper for single related entity.
+- **Use `field.Slice[T]` for `has many` and `many2many`:** Handles collections with batch operations.
+- **Invoke association operations properly:** Such as `.Create()`, `.CreateInBatch()`, `.Update()`, `.Unlink()`, `.Delete()` as part of `Set(...)` during create or update chains.
+- **Apply filters before associations:** Use `.Where()` helper chains to conditionally operate on associations.
+
+### Align Field Naming & Tagging with Queries
+
+- **Consistent DB column naming:** Make sure struct field tags for GORM (`gorm:"column:name"`) align with field helper names.
+- **Tag generated helpers when appropriate:** For instance, use the `gen:"json"` tag to link to custom JSON field helpers.
+
+---
+
+## 4. Maintaining Strong Typing and Avoiding Common Mistakes
+
+### Common Pitfalls & How to Avoid Them
+
+| Pitfall                                 | Description                                                  | Solution / Best Practice                         |
+|----------------------------------------|--------------------------------------------------------------|-------------------------------------------------|
+| Missing or incorrect return values     | Query methods must return at least error or data + error     | Follow GORM CLI’s method return value rules exactly |
+| Mismatched interface and struct names | Inclusion filters excluding structs/interfaces unexpectedly  | Use explicit include/exclude patterns in config to avoid surprises |
+| Overly broad includes                  | Including every interface or struct in large projects slows generation | Use targeted `Include*` filters to scope generation |
+| Ignoring FileLevel setting             | Generates code for unintended files or packages               | Use `FileLevel: true` to restrict config scope when needed |
+| Mixing type aliases and custom types poorly | Leads to invalid or inconsistent field helper mappings        | Map custom types explicitly in `FieldTypeMap` and verify mapping |
+| Not using context in interface methods | Can cause generation or runtime issues in concurrent setups    | Always include `context.Context` in method signatures or let generator add it |
+| Using raw SQL strings without templating | Blocks type-safe generation and increases manual errors       | Write methods with SQL templates and parameter binding DSL |
+| Lack of unit tests for generated code | Problems are detected late or missed entirely                  | Write integration tests, e.g., verify generated query methods behave as expected |
+
+### Enforce Naming Conventions
+
+- Align method and field names with Go naming idioms.
+- Avoid underscores or camelCase inconsistencies between Go and SQL columns.
+- Make sure generated helper variable names match struct and field names exactly.
+
+### Validation and Verification
+
+- After running `gorm gen`, inspect output directories for unexpected files or missing code.
+- Use the `Validating a Successful Setup` guide to verify initial generations.
+- Check logs for skipped files or excluded interfaces to avoid silent misses.
+
+---
+
+## 5. Practical Tips for Team Scalability
+
+- **Adopt clear package/module boundaries:** Align your Go packages with domain boundaries to minimize cross-cutting dependencies.
+- **Version your generated code independently:** Especially if output is checked into VCS; separate generated code folders help.
+- **Use Automation:** Integrate `gorm gen` code generation in CI pipelines to keep generated code current.
+- **Document field helper extensions:** Teams adding custom helpers should document their purposes and usage clearly.
+- **Perform regular pruning:** Remove deprecated interfaces or structs via config excludes to keep generation clean.
+
+---
+
+## 6. Example: Applying Best Practices
+
+Suppose you have a `User` model and a `Query` interface with multiple methods. Here is how you would apply naming and field helper practices:
+
+```go
+// models/user.go
+package models
+
+import "time"
+
+type User struct {
+  ID        uint
+  Name      string
+  Email     string
+  Age       int
+  UpdatedAt time.Time
+  Profile   string `gen:"json"`
+}
+
+// queries/userquery.go
+package queries
+
+import (
+  "context"
+  "gorm.io/cli/gorm/examples/models"
+)
+
+type UserQuery[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(ctx context.Context, id int) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateData(ctx context.Context, user models.User, id int) error
+}
+
+// config.go
+package queries
+
+import (
+  "gorm.io/cli/gorm/field"
+  "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"UserQuery*"},
+  FieldNameMap: map[string]any{
+    "json": JSON{}, // Custom JSON helper
+  },
+  OutPath: "generated/queries",
+}
+```
+
+This approach ensures focused generation, clear type mappings, and scalable output paths.
+
+---
+
+## 7. Troubleshooting & Recovery
+
+<AccordionGroup title="Common Issues and Solutions">
+<Accordion title="Missing generated methods or structs">
+- Check if `IncludeInterfaces` or `ExcludeInterfaces` filters are too restrictive.
+- Confirm the input files passed to the generator contain the intended interfaces and structs.
+- Verify the `FileLevel` setting and make sure configuration applies as expected.
+</Accordion>
+<Accordion title="Incorrect or missing field helpers for custom types">
+- Map custom types explicitly in `FieldTypeMap`.
+- Use the `gen` tag in model fields.
+- Verify that custom field helper implementations are imported and reachable.
+</Accordion>
+<Accordion title="Generation errors related to method signatures">
+- Validate method return types follow allowed patterns: single `error` or `(data, error)`.
+- Include `context.Context` parameter explicitly or allow generator to inject.
+</Accordion>
+<Accordion title="Association operations not working as expected">
+- Double check GORM tags for association correctness.
+- Use `Set(...).Create()`, `Set(...).Update()`, `.Unlink()`, `.Delete()` properly.
+- Apply filtering conditions with `.Where()` before operating on associated records.
+</Accordion>
+<Accordion title="Unexpected files generated or naming clashes">
+- Check `OutPath` and package structure.
+- Use explicit includes and excludes to narrow down output.
+- Review annotations and tags for any naming conflicts.
+</Accordion>
+</AccordionGroup>
+
+### Additional Tips
+
+- Regularly run tests from `examples/output/query_test.go` to ensure generated code works as intended.
+- Use version control diffs to monitor changes in generated code after config updates.
+
+---
+
+## 8. Next Steps & Related Documentation
+
+- [Initial Project Setup](../getting-started/configuration-quickstart/initial-project-setup): Learn how to organize your first Go project with GORM CLI.
+- [Configuring Code Generation](../getting-started/configuration-quickstart/configuring-generation): Deep dive into advanced generation configs.
+- [Generate Type-Safe Query APIs](../guides/getting-started/generate-type-safe-apis): Explore strategies for writing powerful query interfaces.
+- [Building Model-Driven Field Helpers](../guides/getting-started/model-driven-field-helpers): Master strongly typed predicates and setters.
+- [Managing Associations](../guides/real-world-usage-patterns/working-with-associations): Handle create, update, unlink, and delete for associated models.
+- [Common Setup and Generation Issues](../getting-started/troubleshooting-help/common-issues): Troubleshoot broader setup problems.
+
+Use these resources to broaden your mastery and build fully robust GORM CLI-powered projects.
+
+---
