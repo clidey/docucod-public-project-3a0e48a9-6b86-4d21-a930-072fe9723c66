@@ -1,0 +1,302 @@
+---
+title: "Using the Generated Code: Queries, Filters, and Updates"
+description: "Learn how to use the generated query APIs and field helpers in practical code: performing CRUD operations, composing complex filters, chaining updates, and integrating seamlessly with your existing GORM codebase."
+---
+
+# Using the Generated Code: Queries, Filters, and Updates
+
+Unlock the full power of GORM CLI by leveraging the generated type-safe query APIs and model-driven field helpers. This guide walks you through practical usage patterns for querying, filtering, updating, and managing your database with confidence and precision—all while seamlessly integrating with your existing GORM codebase.
+
+---
+
+## 1. Overview: What You Will Accomplish
+
+GORM CLI generates convenient, expressive code that helps you:
+
+- Perform **type-safe queries** using generated interfaces from your annotated Go interfaces.
+- Compose **complex filters** with generated field helpers for basic fields and associations.
+- Execute **updates and create operations** with fluent, composable setters.
+- Manage **associations** through generated helpers that respect relation semantics.
+- Chain conditions and operations for concise, readable data access.
+
+By following this guide, you’ll gain actionable examples and best practices to embed these generated artifacts efficiently into your projects.
+
+---
+
+## 2. Getting Started with Generated Query Interfaces
+
+### Step 1: Initialize Your Query Interface
+
+Suppose you have a generated query interface from an annotated interface like this:
+
+```go
+// Generated interface usage:
+u, err := generated.Query[User](db).GetByID(ctx, 123)
+```
+
+- `generated.Query[User](db)` returns a type-safe query interface tailored for `User` model.
+- Methods like `GetByID`, derived from your interface, execute safe SQL based on your template.
+
+### Step 2: Compose Basic Queries
+
+You can use these methods directly to fetch or manipulate data, benefiting from compile-time checked arguments and SQL templates:
+
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 1)
+if err != nil {
+    // handle error
+}
+fmt.Println(user.Name)
+
+users, err := generated.Query[User](db).FilterByNameAndAge("jinzhu", 25).Find(ctx)
+```
+
+### Verification
+
+Each method call returns expected data types and errors, ensuring you never compile with bad query parameters.
+
+---
+
+## 3. Using Field Helpers for Filters and Conditions
+
+GORM CLI generates field helpers for every struct in your models. These helpers allow fluent, type-safe construction of SQL conditions:
+
+```go
+// Equality predicate
+generated.User.Name.Eq("alice") // SQL: name = 'alice'
+
+// Range predicate
+generated.User.Age.Between(18, 30) // SQL: age BETWEEN 18 AND 30
+
+// Null check
+generated.User.Score.IsNull()
+
+// Like query
+generated.User.Name.Like("%doe%")
+```
+
+### Combining Filters
+
+Use GORM's `Where` method with these predicates to build complex queries:
+
+```go
+users, err := gorm.G[User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Where(generated.User.Age.Gt(20)).
+    Find(ctx)
+```
+
+### Filters with JSON Helpers
+
+Fields tagged for JSON helpers get specialized predicates:
+
+```go
+// Query JSON column "Profile" with key $.vip = true
+user, err := gorm.G[User](db).
+    Where(generated.User.Profile.Equal("$.vip", true)).
+    Take(ctx)
+```
+
+---
+
+## 4. Creating and Updating Records with Fluent Setters
+
+### Creating a New Record
+
+Use `Set(...)` with generated setters to specify values along with association creates:
+
+```go
+// Create user with a pet
+err := gorm.G[User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Age.Set(28),
+        generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+    ).
+    Create(ctx)
+
+if err != nil {
+    // handle error
+}
+```
+
+### Updating Records
+
+Updates can be chained with current conditions using `Where(...)`:
+
+```go
+err := gorm.G[User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Name.Set("alicia"), generated.User.Age.Incr(1)).
+    Update(ctx)
+
+if err != nil {
+    // handle error
+}
+```
+
+### Updating Associated Records
+
+You can update related entities conditionally:
+
+```go
+// Update pet name where user ID = 1 and pet name = 'fido'
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+      Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+```
+
+---
+
+## 5. Managing Associations: Create, Unlink, and Delete
+
+Generated association helpers make it clear how to operate on relations safely.
+
+| Operation  | Semantics                                              | Example                              |
+|------------|--------------------------------------------------------|------------------------------------|
+| Create     | Inserts and links new associated rows (has one/has many/m2m) | See example in Creating a New Record above |
+| Unlink     | Clears foreign keys (FK) or removes join rows only            | `generated.User.Pets.Unlink()`     |
+| Delete     | Deletes associated rows or join table entries                | `generated.User.Pets.Delete()`     |
+
+### Examples
+
+```go
+// Unlink all pets from user ID=1
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete pets named 'old'
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete()).
+  Update(ctx)
+```
+
+---
+
+## 6. Composing Complex Filters with Template Queries
+
+Generated query interfaces allow parameters like slices and structs to operate dynamically:
+
+```go
+// Filter by multiple users
+usersToFilter := []User{{Name: "alice", Age: 30}, {Name: "bob", Age: 25}}
+results, err := generated.Query[User](db).Filter(ctx, usersToFilter)
+
+// Filter by time range
+start, end := time.Now().Add(-24*time.Hour), time.Now()
+results, err := generated.Query[User](db).FilterWithTime(ctx, start, end)
+```
+
+These calls bind automatically into your SQL templates, enhancing flexibility with type safety.
+
+---
+
+## 7. Best Practices and Tips
+
+- **Always check errors** on method calls to handle database issues gracefully.
+- **Use `{Set,Where}` chaining** to build incremental updates or constraints.
+- **Leverage association helpers** to manage foreign keys instead of manual FK updates.
+- **Utilize generated JSON helpers** if your model has JSON-typed columns.
+- **Prefer generating configurations** with `genconfig.Config` in your packages for organized output and field mappings.
+
+---
+
+## 8. Common Pitfalls & Troubleshooting
+
+<AccordionGroup title="Common Issues With Generated Code Usage">
+<Accordion title="Method Not Found on Generated Query Interface">
+Ensure your input interface files include correct SQL template comments and conform to method signature rules. Check your `genconfig.Config` for inclusion/exclusion filters that might omit your interface.
+</Accordion>
+<Accordion title="Field Helpers Missing or Incorrect">
+Verify your model struct fields are exported and proper tags (like `gen:"json"`) are used. Also check the generator output directory to confirm generation.
+</Accordion>
+<Accordion title="SQL Syntax Errors at Runtime">
+When writing SQL templates in interface comments, use the GORM CLI SQL DSL correctly with placeholders. Refer to the [Template DSL documentation](https://gorm.io/cli/gorm/docs#template-dsl) for proper syntax.
+</Accordion>
+<Accordion title="Generated Code Not Importing in Project">
+Check your output path flags during generation and import paths in your Go modules. Run `go mod tidy` to refresh dependencies.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 9. Next Steps & Additional Resources
+
+- Explore advanced usages in [Working with Associations: Create, Update, Unlink, Delete](./working-with-associations) to master association operations.
+- Deep dive into [Writing Safe, Dynamic Queries with Templates and DSL](./template-queries-dsl) for crafting powerful SQL annotations.
+- Customize generation behavior via `genconfig.Config` as detailed in [Customizing Generation with genconfig.Config](./customizing-generation).
+- Learn to define your own JSON and other custom field helpers in [Defining and Using Custom Field Helpers](./json-field-helpers).
+
+
+---
+
+## Summary Diagram: Typical Generated Code Usage Flow
+
+```mermaid
+flowchart TD
+  Start([Start Application]) --> InitDB[Initialize *gorm.DB Instance]
+  InitDB --> CreateQuery[Create Generated Query Interface: Query[User](db)]
+  CreateQuery -->|Call| ExecuteMethod{Call Generated Method}
+
+  ExecuteMethod -->|Fetch Data| ReturnData[Return Typed Data & Error]
+  ExecuteMethod -->|Chain Filters| ReturnInterface[Return Chainable Interface]
+
+  ReturnInterface --> ComposeFilters[Compose Field Helper Filters]
+  ComposeFilters --> ExecuteQuery[Call Find/First/Take]
+  ExecuteQuery --> ReturnData
+
+  ReturnData --> ProcessResult[Process Query Result]
+  ProcessResult --> End([End])
+
+  subgraph CRUD Operations
+    CreateNew[Use Set(...).Create(ctx)]
+    UpdateExisting[Use Where(...).Set(...).Update(ctx)]
+    DeleteAssoc[Use AssociationHelpers.Delete()]
+    UnlinkAssoc[Use AssociationHelpers.Unlink()]
+  end
+
+  ReturnInterface -->|Create/Update| CRUD Operations
+
+  
+```
+
+---
+
+## Frequently Asked Questions
+
+<AccordionGroup title="FAQ">
+<Accordion title="Do I need to write SQL queries manually?">
+No, you write SQL in interface method comments using GORM CLI’s template directives, which the tool compiles into type-safe code.
+</Accordion>
+<Accordion title="Can I use the generated code alongside manual GORM queries?">
+Yes, the generated helpers integrate seamlessly with any GORM code since they produce native `*gorm.DB` compatible expressions.
+</Accordion>
+<Accordion title="How do I handle custom field types?">
+Use the `genconfig.Config` in your package to map Go types or custom tags to your field helpers (e.g., JSON).
+</Accordion>
+</AccordionGroup>
+
+---
+
+By mastering the usage of generated query APIs and field helpers as described, your Go projects gain robust, maintainable, and fluent database access layers that boost productivity and safety.
+
+---
+
+# References
+
+- [GORM CLI Quickstart](./quickstart-basic-usage)
+- [Customizing Generation](./customizing-generation)
+- [Working with Associations](./working-with-associations)
+- [Template Queries and DSL](./template-queries-dsl)
+- [JSON Field Helpers](./json-field-helpers)
+
+---
+
+_This page is part of the [Guides](/guides/getting-started/using-generated-code) section for a deeper GORM CLI user experience._

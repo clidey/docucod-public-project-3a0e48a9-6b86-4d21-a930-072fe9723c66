@@ -1,0 +1,292 @@
+---
+title: "Model-Driven Field Helpers"
+description: "Explore how GORM CLI analyzes Go structs to create strongly-typed helpers for filtering, updating, and associating records, supporting both basic fields and associations. Grasp the rules and patterns for predictable API generation."
+---
+
+# Model-Driven Field Helpers
+
+Explore how GORM CLI analyzes Go structs to create strongly-typed helpers for filtering, updating, and associating records, supporting both basic fields and associations. Grasp the rules and patterns for predictable API generation.
+
+---
+
+## Introduction
+
+Model-Driven Field Helpers are generated constructs that provide Go developers using GORM with a type-safe, fluent, and discoverable way to build queries and updates based on their data models. From your Go structs, GORM CLI generates strongly-typed fields and association helpers, empowering you to write expressive, error-resistant database code.
+
+This page explores the core concepts, user workflows, and details around how these helpers are created, what features they offer, and how to use them effectively in your GORM projects.
+
+---
+
+## What Are Model-Driven Field Helpers?
+
+At its core, the generator scans your Go struct model types and creates corresponding helper variables and types that represent each field and association in the model. Each helper provides methods to construct SQL predicates and update assignments with strong typing and IDE auto-completion.
+
+### Key Characteristics
+
+- **Strong Typing:** Each model field maps to a Go generic wrapper (`field.String`, `field.Number[int]`, `field.Bool`, etc.) reflecting the Go type and underlying database representation.
+- **Support for Basic Fields:** Includes primitive types (int, string, bool), time types (`time.Time`), nullable SQL types (`sql.NullInt64`, `sql.NullTime`), and custom-mapped fields.
+- **Association Helpers:** For `has one`, `has many`, `belongs to`, and `many2many` relations, helpers like `field.Struct[T]` and `field.Slice[T]` are generated, enabling fluent association operations.
+- **Column and Relationship Awareness:** Each helper is aware of its database column or association name, enabling consistent query generation and update logic.
+
+---
+
+## How Field Helpers Are Generated
+
+GORM CLI processes struct definitions to generate single-instance variables per struct named after the struct (e.g., `User`) containing all fields as separate helpers. Consider the following example:
+
+```go
+var User = struct {
+    ID        field.Number[uint]
+    Name      field.String
+    Age       field.Number[int]
+    IsAdult   field.Bool
+    Profile   examples.JSON
+    Pets      field.Slice[models.Pet]
+    Company   field.Struct[models.Company]
+}{
+    ID:        field.Number[uint]{}.WithColumn("id"),
+    Name:      field.String{}.WithColumn("name"),
+    Age:       field.Number[int]{}.WithColumn("age"),
+    IsAdult:   field.Bool{}.WithColumn("is_adult"),
+    Profile:   examples.JSON{}.WithColumn("profile"),
+    Pets:      field.Slice[models.Pet]{}.WithName("Pets"),
+    Company:   field.Struct[models.Company]{}.WithName("Company"),
+}
+```
+
+### Basic Field Mapping Rules
+
+- Primitive types (e.g., `string`, `int`, `bool`) map to respective `field.String`, `field.Number[T]`, and `field.Bool` wrappers.
+- Nullable types (e.g., `sql.NullInt64`, `sql.NullTime`) map to `field.Field[T]` wrappers.
+- Time types (`time.Time`) map to `field.Time`.
+- Named type mappings and custom conversions can be configured via `genconfig.Config` to handle specialized types such as JSON.
+
+### Associations
+
+- Struct fields representing related models generate `field.Struct[T]` helpers.
+- Slice fields for collections (e.g., `[]Pet`) generate `field.Slice[T]` helpers.
+- These helpers allow for additional actions on related data, such as creating new associated records, updating linked entities, unlinking relations, and deleting associated data.
+
+---
+
+## Using Model-Driven Field Helpers
+
+The generated helpers are integrated directly with standard GORM queries and updates and enhance your code by enabling:
+
+- **Strongly-Typed Filters and Predicates**
+- **Safe Updates and Creates**
+- **Navigable Association Operations**
+
+### Filtering and Querying
+
+You can build precise and readable filters:
+
+```go
+// Find users older than 18 with role "active"
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx)
+```
+
+This use of method chains operates on the strongly-typed field helpers, ensuring compile-time safety.
+
+### Updates Using Fluent Setters
+
+Setting new values safely, including zero values and SQL expressions:
+
+```go
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Set(
+        generated.User.Age.Set(0),
+        generated.User.IsAdult.Set(false),
+        generated.User.Score.Set(sql.NullInt64{}), // NULL
+        generated.User.Age.Incr(1),
+    ).
+    Update(ctx)
+```
+
+### Handling Associations
+
+Association helpers enable complex relational operations:
+
+- **Create** new associated records inline
+- **Update** associated records conditionally
+- **Unlink** associations (nullifying foreign keys or removing join records)
+- **Delete** associated records or relation rows
+- **CreateInBatch** for batch creating multiple associated records
+
+Example: Creating a user with one pet and languages:
+
+```go
+gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+        generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+    ).
+    Create(ctx)
+```
+
+Example: Unlink pets with a filter:
+
+```go
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(
+        generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Unlink(),
+    ).
+    Update(ctx)
+```
+
+---
+
+## Underlying Field Helper Types & Methods
+
+Field helpers provide a rich API to construct SQL clauses fluently and safely. Some common methods include:
+
+| Method             | Description                                      | Example                                    |
+|--------------------|-------------------------------------------------|--------------------------------------------|
+| `Eq(value)`        | Equal predicate (`= value`)                      | `User.Age.Eq(18)`                          |
+| `Gt(value)`        | Greater than predicate (`> value`)               | `User.Age.Gt(18)`                          |
+| `Between(min, max)`| Between predicate                               | `User.Age.Between(18, 60)`                 |
+| `Like(pattern)`    | LIKE predicate                                  | `User.Name.Like("%jade%")`                |
+| `IsNull()`         | IS NULL check                                   | `User.Score.IsNull()`                       |
+| `IsNotNull()`      | IS NOT NULL check                               | `User.LastLogin.IsNotNull()`                |
+| `Set(value)`       | Setter for updates and creations                 | `User.Name.Set("alice")`                   |
+| `SetExpr(expr)`    | Set based on SQL expression                       | `User.Age.SetExpr(clause.Expr{SQL:"age+1"})` |
+| `Incr(delta)`      | Increment numeric fields                          | `User.Age.Incr(2)`                          |
+| `Upper()`          | String transformation setter (example)           | `User.Name.Upper()`                         |
+
+Association helpers (`field.Struct[T]`, `field.Slice[T]`) add methods such as:
+
+| Method       | Description                                        | Usage Example                              |
+|--------------|---------------------------------------------------|--------------------------------------------|
+| `Create()`   | Create and associate a new related record         | `User.Account.Create(...)`                 |
+| `CreateInBatch([]T)` | Batch create and associate multiple records | `User.Languages.CreateInBatch(...)`        |
+| `Update(assignments)`| Update associated records matching a filter    | `User.Pets.Where(...).Update(...)`         |
+| `Unlink()`   | Unlink associations without deleting records      | `User.Pets.Unlink()`                        |
+| `Delete()`   | Delete associated records (or join rows for m2m) | `User.Pets.Delete()`                        |
+| `Where(predicates)`| Filter associated rows for Update/Delete/Unlink | `User.Pets.Where(Pet.Name.Eq("fido")).Delete()` |
+
+---
+
+## Naming and Generation Patterns
+
+- Struct fields are analyzed for Go type and struct tags.
+- Fields get helper types; associations get corresponding `field.Struct` or `field.Slice` wrappers.
+- Column names come from struct tags or follow a naming convention (snake_case).
+- Custom mappings from your `genconfig.Config` allow overriding helper type inference by Go type or field name.
+ 
+---
+
+## Practical Tips & Best Practices
+
+- **Always use generated helpers:** They ensure compile-time protection and consistent naming.
+- **Use zero-value setters explicitly:** To update fields with zero values (e.g., `false`, `0`, empty string), use `.Set()` explicitly.
+- **Leverage association helpers for relation consistency:** Avoid manual FK manipulation; use `.Create()`, `.Update()`, `.Unlink()`, and `.Delete()`.
+- **Configure custom field mappings as needed:** For specialized columns like JSON, configure `genconfig.Config` mapping to custom helpers.
+- **Use predicates for complex queries:** Combine multiple field predicates in `Where` clauses for safe, expressive queries.
+
+---
+
+## Common Pitfalls & Troubleshooting
+
+<AccordionGroup title="Common Issues">
+<Accordion title="Generated Helpers Not Recognized in IDE">
+Ensure your IDE indexes the generated code directory (`-o` output) and imports generated packages correctly. Run `go mod tidy` after generation.
+</Accordion>
+<Accordion title="Updates Not Applying When Using Zero Values">
+Explicitly use `.Set()` to assign zero values in updates. Omission leads to fields being ignored.
+</Accordion>
+<Accordion title="Custom Field Types Not Applying">
+Verify your `genconfig.Config` is declared in the same package as your model or interface. Confirm proper field tags and configuration keys.
+</Accordion>
+<Accordion title="Association Methods Fail or Compile with Errors">
+Confirm association fields correspond to valid GORM relationships. The helper methods are generated only for recognized relations.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Example: Using Generated Field Helpers
+
+```go
+// Query users older than 18 with 'active' role
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx)
+
+// Update role from pending to active
+_, err = gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Update(ctx, "role", "active")
+
+// Create a user with a pet linked
+err = gorm.G[models.User](db).
+    Set(
+       generated.User.Name.Set("alice"),
+       generated.User.Pets.Create(generated.Pet.Name.Set("rex")),
+    ).
+    Create(ctx)
+
+// Unlink pets named 'fido' from user ID 1
+err = gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Unlink()).
+    Update(ctx)
+```
+
+---
+
+## How This Fits Into Your Workflow
+
+1. **Define your Go struct models** representing your database schema.
+2. **Configure optional mappings with `genconfig.Config`** to customize helper generation.
+3. **Run GORM CLI to generate field helpers** in your output directory.
+4. **Use the generated helpers in your GORM queries and updates** for safer, clearer, and fluent database operations.
+
+---
+
+## Additional Resources
+
+- [Core Concepts & Terminology](/overview/core-concepts-and-architecture/core-concepts)
+- [Interface-Driven Queries](/concepts/architecture-and-core-concepts/interface-driven-queries)
+- [Working with Associations Guide](/guides/advanced-patterns/working-with-associations)
+- [Custom Field Helpers](/concepts/configuration-and-extensibility/custom-field-helpers)
+- [Using the Generated Code](/guides/getting-started/using-generated-code)
+
+---
+
+## Related Mermaid Diagram: Model-Driven Field Helper Generation Flow
+
+```mermaid
+flowchart TD
+  ModelStructs["Go Struct Models"] --> AnalyseFields["Analyze Fields & Types"]
+  AnalyseFields --> MapToHelpers["Map to Field Helper Types"]
+  MapToHelpers --> GenerateHelpers["Generate Field & Association Helpers"]
+  GenerateHelpers --> OutputFiles["Write Generated Go Code"]
+  OutputFiles --> IDE["IDE & Compiler" ]
+  IDE --> Developer["Developer Uses Helpers in Queries & Updates"]
+
+  subgraph "Helper Types"
+    BasicFields[field.Primitive & Named Types]
+    Associations[field.Struct[T] & field.Slice[T]]
+  end
+
+  AnalyseFields --> BasicFields
+  AnalyseFields --> Associations
+
+  classDef default fill:#f9f,stroke:#333,stroke-width:1px;
+  class HelperTypes,BasicFields,Associations default;
+```
+
+This diagram summarizes how your model structs transform progressively into typed helpers.
+
+---
+
+By understanding and leveraging model-driven field helpers, you gain a powerful toolset that bridges your Go application code and database access layer in a type-safe, expressive, and maintainable way.
+
+---
+
+*End of Model-Driven Field Helpers Guide*
