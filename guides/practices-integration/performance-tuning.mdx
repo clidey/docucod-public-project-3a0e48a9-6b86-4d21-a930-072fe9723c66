@@ -1,0 +1,246 @@
+---
+title: "Optimizing Generation and Query Performance"
+description: "Provides actionable guidance to reduce build and query times, understand generation scope control using filters, and leverage efficient patterns for large models or complex queries. Includes advice on using config options and selective code generation."
+---
+
+# Optimizing Generation and Query Performance
+
+GORM CLI empowers you to efficiently generate type-safe query APIs and model-driven field helpers tailored for both simple and complex Go projects using GORM. This guide focuses explicitly on optimizing the **code generation** and **query execution** performance, especially for large models or complex queries. You will learn how to reduce build times, control generation scope, and adopt practical patterns to keep your development fast and maintainable.
+
+---
+
+## 1. Understanding Generation Scope and Performance
+
+### What This Guide Helps You Accomplish
+- Reduce the time it takes for GORM CLI to generate code on large codebases.
+- Control which interfaces and structs are included in code generation to avoid unnecessary output.
+- Use filters and config options to tailor generation to your current needs.
+- Leverage efficient SQL template patterns to keep queries performant.
+
+### Prerequisites
+- Familiarity with GORM CLI basics: defining models and query interfaces.
+- Your Go project set up with GORM and GORM CLI installed.
+- Some experience with generics and Go tooling.
+
+### Expected Outcome
+- You will generate lean, focused code.
+- Understand filtering rules to exclude irrelevant interfaces or structs.
+- Write query interfaces that produce efficient SQL code.
+- Improve your build and query runtime.
+
+### Time Estimate
+- ~15–30 minutes to review and apply optimizations in your project.
+
+### Difficulty Level
+- Intermediate
+
+---
+
+## 2. Step-by-Step Optimization Instructions
+
+### Step 1: Use Configuration to Limit Generation Scope
+
+GORM CLI supports **package-level configuration** using `genconfig.Config`. Use this to restrict generation to only necessary parts of your codebase.
+
+```go
+package examples
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+  // Generate code only in the specified output directory
+  OutPath: "generated",
+
+  // Include only interfaces whose names start with 'Query'
+  IncludeInterfaces: []any{"Query*"},
+
+  // Exclude specific interfaces or structs (useful for deprecated or DTO types)
+  ExcludeInterfaces: []any{"*Deprecated*"},
+  ExcludeStructs:    []any{"*DTO"},
+
+  // When true, limits generation to the current file instead of the whole package
+  FileLevel: false,
+}
+```
+
+**Effect:**
+- Parsing is faster because fewer files and types are processed.
+- Generated code is smaller, compile time reduces.
+
+<Check>
+Always verify your include/exclude patterns using shell-style wildcard matching to ensure coverage.
+</Check>
+
+### Step 2: Apply Filters for Interfaces and Structs
+
+GORM CLI lets you whitelist or blacklist specific interfaces or structs using the configuration. This is crucial when your package contains multiple interfaces, but only some drive code generation.
+
+```go
+IncludeInterfaces: []any{"Query*", models.Query(nil)},
+ExcludeInterfaces: []any{"*Internal*"},
+IncludeStructs:    []any{"User", "Account*"},
+```
+
+- Use type literals (e.g., `models.Query(nil)`, `models.User{}`) or patterns.
+- Whitelist takes priority over blacklist.
+
+### Step 3: Organize Your Interfaces by Responsibility
+
+To reduce unnecessary complex query generation:
+- Split large interfaces into smaller, focused ones.
+- Avoid embedding unrelated SQL templates in a single interface.
+
+### Step 4: Write Lean SQL Templates and Use Efficient Patterns
+
+Your SQL templating directly impacts generation speed and the performance of generated query methods.
+
+**Best Practices:**
+- Prefer simple `WHERE` conditions with explicit `{{if}}` guards to prevent unnecessary filtering.
+- Use `{{where}}` and `{{set}}` blocks only for conditional SQL generation.
+- Avoid large, deeply nested conditional templates when possible.
+
+#### Example: Efficient Conditional Update
+
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age, {{end}}
+//   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateInfo(user models.User, id int) error
+```
+
+This approach yields generated code that builds the SQL string efficiently, skipping unnecessary clauses.
+
+### Step 5: Use Selective Code Generation on Large Models
+
+Some models contain many fields and associations, generating a huge number of helpers and interface methods. You can selectively generate only what you need by combining:
+- Package-level filtering
+- Struct whitelist (`IncludeStructs`)
+- Field helper type mapping (`FieldNameMap` and `FieldTypeMap`)
+
+```go
+FieldNameMap: map[string]any{
+  "json": JSON{},          // Map `gen:"json"` fields to a custom JSON helper
+  "date": field.Time{},    // Map `gen:"date"` to time helpers
+},
+FieldTypeMap: map[any]any{
+  sql.NullTime{}: field.Time{},
+},
+```
+
+This reduces the generated helper set to only relevant fields.
+
+### Step 6: Cache and Incremental Generation
+
+- Use a dedicated output directory and persistent cache when available.
+- Regenerate only changed files by running GORM CLI on specific packages or files.
+- Use the `-i` input path flag precisely.
+
+---
+
+## 3. Examples & Real-World Patterns
+
+### Example: Configuration to Exclude Deprecated Interfaces
+
+```go
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"Query*"},
+  ExcludeInterfaces: []any{"*Deprecated*"},
+}
+```
+
+This config ensures CLI only generates code for interfaces starting with `Query` except those with deprecated naming.
+
+### Example: Using Custom JSON Field Helper
+
+Assuming a model field tagged with `gen:"json"`:
+
+```go
+type User struct {
+  Profile string `gen:"json"`
+}
+```
+
+And configured in `FieldNameMap`:
+
+```go
+FieldNameMap: map[string]any{
+  "json": JSON{},
+},
+```
+
+Generated code uses the `JSON` helper type, optimizing for JSON column operations and reducing unnecessary generic helpers.
+
+---
+
+## 4. Troubleshooting & Tips
+
+### Common Issues
+
+- **Slow generation on large packages:** Narrow down with `IncludeInterfaces` and `IncludeStructs`.
+- **Unexpected interfaces included:** Double-check wildcard patterns and type literals.
+- **Generated code too large:** Verify if `FileLevel: true` could help by limiting scope.
+- **Incorrect field helper mapping:** Confirm correct `FieldNameMap` and `FieldTypeMap` usage.
+
+### Best Practices
+
+- Run generation frequently on focused subsets during development.
+- Use configuration to reduce noise and compilation times.
+- Write SQL templates with minimal conditionals but clear intent.
+- Use named parameters consistently to ensure query correctness.
+
+### Performance Considerations
+
+- Avoid deeply nested `{{for}}` or `{{if}}` inside SQL templates for large collections.
+- Leverage Go generics and context injection automatically added.
+- Use batch operations and association helpers where applicable to reduce query counts.
+
+---
+
+## 5. Next Steps & Related Content
+
+### What's Next
+- Learn more about [Writing Advanced SQL Templates with the Embedded DSL](/guides/advanced-patterns/template-dsl). This will help you craft efficient, maintainable SQL queries.
+- Explore the [Configuring Code Generation with genconfig](/guides/advanced-patterns/generation-config) guide for deeper customization.
+- After optimizing generation, see [Validating Generated Code](/getting-started/first-run-usage/quick-validation) to verify output correctness.
+
+### Related Guides
+- [Using Model-Driven Field Helpers](/guides/core-getting-started/field-helper-basics) for efficient querying.
+- [Best Practices for Interface Design and Query Safety](/guides/practices-integration/practices-patterns) to write scalable query APIs.
+
+### Resources
+- [GORM CLI README](README.md) for an overview.
+- Configuration examples in [examples/query.go](examples/query.go).
+
+---
+
+## Diagram: Code Generation & Filtering Flow
+
+```mermaid
+flowchart TD
+  A[User's Go Code
+(Models + Query Interfaces)] --> B[GORM CLI Generator]
+  B --> C1[Reads Package-Level genconfig.Config]
+  B --> C2[Parses Files and AST]
+  C1 --> D[Apply Include/Exclude
+Filters on Interfaces & Structs]
+  C2 --> D
+  D --> E[Generate Go Code for
+Selected Interfaces and Models]
+  E --> F[Write Generated Files
+to Output Directory]
+  F --> G[User Integrates Generated Code
+into Application]
+
+  classDef decision fill:#f96,stroke:#333,stroke-width:2px;
+  class D decision;
+```
+
+---
+
+<Note>
+This guide focuses solely on optimizing generation and query performance, helping you maintain fast builds and lean code in your GORM CLI projects. For a deeper dive on writing SQL templates or managing associations, please explore the linked guides.
+</Note>

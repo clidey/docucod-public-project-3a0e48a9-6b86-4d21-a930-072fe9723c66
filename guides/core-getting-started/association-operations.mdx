@@ -1,0 +1,356 @@
+---
+title: "Working with Associations: Create, Update, Unlink & Delete"
+description: "Guides users through handling associations with strong typing: creating and linking related data, updating associations conditionally, and performing unlink and delete operations. Includes parent-child, many-to-many, and polymorphic examples drawn from real-world scenarios."
+---
+
+# Working with Associations: Create, Update, Unlink & Delete
+
+This guide empowers you to manage database associations in GORM CLI with full type safety and clarity. You will learn to create and link related data, update associations conditionally, and perform unlink and delete operations seamlessly. Coverage includes common association types such as parent-child relationships, many-to-many links, and polymorphic associations, all demonstrated with real-world code examples.
+
+---
+
+## 1. Understanding Association Operations
+
+### What You Will Achieve
+- Precisely create and link associated records in one fluent call
+- Update related data with conditional filtering
+- Unlink associations without deleting related data
+- Safely delete associated rows where required
+
+### Prerequisites
+- Familiarity with GORM models and association types (has one, has many, belongs to, many2many, polymorphic)
+- Generated field helpers for your models (e.g., `generated.User.Pets`)
+- Basic understanding of Go generics and GORM CLI-generated APIs
+
+### Association Types & Semantics
+|Association Type|Unlink Operation Effect|Delete Operation Effect|
+|-|-|-|
+|BelongsTo|NULL parent foreign key (unlink only)|Deletes associated parent rows|
+|Has One / Has Many|NULL foreign keys on child rows|Deletes child rows|
+|Many2Many|Removes join table rows only|Removes join table rows only (parent rows remain)|
+
+
+## 2. Creating and Linking Associations
+
+You can create new related records and link them to one or more parent records in a single fluent operation.
+
+### Scenario: Creating a Single Associated Record
+
+Create a new user and one pet directly linked to that user.
+
+```go
+ctx := context.Background()
+db := setupDB()
+
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(
+      generated.Pet.Name.Set("fido"),
+    ),
+  ).
+  Create(ctx)
+
+if err != nil {
+  log.Fatalf("failed to create user with pet: %v", err)
+}
+```
+
+This inserts a new user and simultaneously creates and associates a pet named "fido".
+
+### Scenario: Linking Multiple Associations (Many2Many or Has Many)
+
+Link two existing languages to a new user.
+
+```go
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("polyglot"),
+    generated.User.Languages.CreateInBatch([]models.Language{
+      {Code: "EN"},
+      {Code: "FR"},
+    }),
+  ).
+  Create(ctx)
+
+if err != nil {
+  log.Fatalf("failed to create user with languages: %v", err)
+}
+```
+
+This efficiently creates associations to multiple languages using batch creation.
+
+### Batch Linking to Existing Parents
+
+For has-many relations, create multiple pets and link to matched users.
+
+```go
+pets := []models.Pet{
+  {Name: "buddy"},
+  {Name: "charlie"},
+}
+
+_, err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.CreateInBatch(pets)).
+  Update(ctx)
+
+if err != nil {
+  log.Fatalf("failed to batch create pets: %v", err)
+}
+```
+
+---
+
+## 3. Updating Associations Conditionally
+
+You can update associated records conditionally using the `Where` clause applied to the association helper.
+
+### Example: Update Single Association With Condition
+
+Update a user's pet where the pet's name is "fido".
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+      Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+if err != nil {
+  log.Fatalf("failed to update pet name: %v", err)
+}
+```
+
+This searches pets named "fido" belonging to user ID 1 and updates the name to "rex".
+
+### Updating Many2Many Associations
+
+Update the name of a language associated with a user:
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Languages.Where(generated.Language.Code.Eq("EN")).
+      Update(generated.Language.Name.Set("English-US")),
+  ).
+  Update(ctx)
+
+if err != nil {
+  log.Fatalf("failed to update language name: %v", err)
+}
+```
+
+This updates the language name for the joined language with code "EN".
+
+---
+
+## 4. Unlinking Associations Without Deleting Data
+
+Unlink removes the association link, leaving the associated rows intact.
+
+### Semantics Recap:
+- BelongsTo: sets the parent's foreign key to NULL
+- HasOne/HasMany: sets the child's foreign key to NULL
+- Many2Many: removes the join table rows only
+
+### Unlink Example: Remove all Pets Association for a User
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+if err != nil {
+  log.Fatalf("failed to unlink pets: %v", err)
+}
+```
+
+After execution, the pets remain in the database but their `user_id` foreign key is set to NULL.
+
+### Unlink With Conditions
+
+Unlink only a subset of the association, e.g., pets named "oldpet".
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("oldpet")).Unlink()).
+  Update(ctx)
+```
+
+---
+
+## 5. Deleting Associated Records
+
+Use `Delete()` on associations to remove associated rows from the database.
+
+### Delete Example: Delete User's Pets With Specific Name
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("obsolete")).Delete()).
+  Update(ctx)
+
+if err != nil {
+  log.Fatalf("failed to delete pets: %v", err)
+}
+```
+
+This deletes pets named "obsolete" belonging to the user.
+
+### Important Note for Many2Many
+
+Deletion on many2many removes join table entries only. The associated rows themselves remain:
+
+```go
+// Remove join rows linking user and language 'EN' but keep language row
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Languages.Where(generated.Language.Code.Eq("EN")).Delete()).
+  Update(ctx)
+```
+
+After this, language "EN" still exists in the `languages` table.
+
+---
+
+## 6. Polymorphic Associations
+
+GORM CLI supports polymorphic associations with the same CRUD and unlink semantics.
+
+### Example: Update Polymorphic Toy Associated to Pet
+
+```go
+_, err := gorm.G[Pet](db).
+  Where(generated.Pet.ID.Eq(1)).
+  Set(generated.Pet.Toy.Where(generated.Toy.Name.Eq("ball")).Update(generated.Toy.Name.Set("cube"))).
+  Update(ctx)
+
+if err != nil {
+  log.Fatalf("failed to update polymorphic toy: %v", err)
+}
+```
+
+### Unlink Polymorphic Association
+
+Unlink zeroes the polymorphic keys but retains the row:
+
+```go
+_, err := gorm.G[Pet](db).
+  Where(generated.Pet.ID.Eq(1)).
+  Set(generated.Pet.Toy.Unlink()).
+  Update(ctx)
+```
+
+### Delete Polymorphic Association Row
+
+```go
+_, err := gorm.G[Pet](db).
+  Where(generated.Pet.ID.Eq(1)).
+  Set(generated.Pet.Toy.Delete()).
+  Update(ctx)
+```
+
+Deletes the polymorphic `toy` row.
+
+---
+
+## 7. Summary of Key Methods on Association Helpers
+
+| Method              | Description                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| `Create(assignments ...clause.Assignment)` | Creates and links one associated record per matched parent (has one/belongs to)         |
+| `CreateInBatch(records []T)`               | Batch create and link multiple associated records per matched parent (has many/many2many)  |
+| `Where(conditions ...clause.Expression)`  | Adds conditions to filter associated rows before Update/Delete/Unlink                      |
+| `Update(assignments ...clause.Assignment)`| Updates the associated rows matching conditions                                           |
+| `Delete()`                                | Deletes associated rows matching condition                                                |
+| `Unlink()`                                | Removes association link without deleting any rows                                        |
+
+---
+
+## 8. Practical Tips & Best Practices
+
+- **Use `Where` for fine-grained targeting:** Narrow down association updates or deletes by specifying precise conditions.
+- **Understand unlink vs delete:** Unlink preserves rows but clears associations; delete removes rows (or join rows for many2many).
+- **Batch operations for efficiency:** `CreateInBatch` efficiently handles multiple linked records.
+- **Leverage generated field helpers:** These provide compile-time safety and fluent APIs to avoid runtime errors.
+- **Test association changes carefully:** Especially with deletion and unlinking, ensure the correct data is affected.
+
+---
+
+## 9. Troubleshooting Common Issues
+
+<AccordionGroup title="Association Operation Troubleshooting">
+<Accordion title="Unlink Leaves Foreign Key NOT NULL">
+Check your GORM model’s foreign key tag to ensure it is nullable. Non-null FKs cannot be set to NULL, causing unlink failures.
+</Accordion>
+<Accordion title="Update Association Doesn't Affect Any Rows">
+Ensure conditions passed in `Where` filters are correct and matching associated rows exist.
+
+Validate generated SQL logs to verify filtering.
+</Accordion>
+<Accordion title="Delete on Many2Many Removes More than Just Join Rows">
+Confirm you use association helpers generated by GORM CLI on the parent side. Incorrect usage might cause deletion of parent rows.
+</Accordion>
+<Accordion title="Batch Create Association Fails with SQL Error">
+Verify batch operation is supported by underlying database and check value slices supplied to `CreateInBatch`.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 10. Next Steps & Related Documentation
+
+- Explore [Using Model-Driven Field Helpers](/guides/core-getting-started/field-helper-basics) for query & update patterns
+- Learn advanced SQL Template DSL usage in [Writing Advanced SQL Templates](/guides/advanced-patterns/template-dsl)
+- Review [Generating Code and Integration](/getting-started/first-run-usage/generating-code) for full workflow
+- Consult [Best Practices for Interface Design](/guides/practices-integration/practices-patterns) for safer query definitions
+
+---
+
+## Appendix: Example Code Snippet - Create, Update, Unlink, Delete
+
+```go
+ctx := context.Background()
+db := setupDB()
+
+// Create new user with pets
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Update pet name where name='fido'
+_, err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex"))).
+  Update(ctx)
+
+// Unlink pets (keep pet records, remove association)
+_, err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete pets named 'oldpet'
+_, err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("oldpet")).Delete()).
+  Update(ctx)
+
+if err != nil {
+  log.Fatalf("association operation failed: %v", err)
+}
+```
+
+---
+
+This guide shows you the full capability of GORM CLI's association helpers, enabling clean, concise, and type-safe association management directly in Go code.

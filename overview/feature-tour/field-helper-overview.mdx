@@ -1,0 +1,228 @@
+---
+title: "Model-Driven Field Helpers"
+description: "Explains generation of reusable helpers for common filtering, updates, ordering, and association operations directly from model definitions. Focuses on how this eliminates repetitive code and enables expressive, chainable queries."
+---
+
+# Model-Driven Field Helpers
+
+GORM CLI automatically generates reusable, type-safe helpers from your Go model structs, empowering you to write expressive, maintainable, and compile-time safe queries and updates. This page dives into how model-driven field helpers eliminate repetitive, error-prone code and streamline common filtering, updating, ordering, and association operations directly from your struct definitions.
+
+---
+
+## What Are Model-Driven Field Helpers?
+
+Model-driven field helpers are generated Go types and variables representing fields in your GORM model structs. Each helper corresponds to a struct field—covering basic scalar columns, nullable types, embedded timestamps, and associations—and provides a fluent API to construct SQL expressions, update assignments, and sorting rules tailored to that field's Go type.
+
+Together these helpers allow you to interact with your database in an intuitive, discoverable, and type-safe manner without manually writing repetitive query fragments or risking SQL injection.
+
+---
+
+## Why Use Field Helpers?
+
+Writing SQL filters, updates, or ordering conditions by hand is repetitive and error-prone:
+
+- Typing column names as strings can lead to typographical errors
+- Using raw SQL clauses requires manual escaping and is not always type-safe
+- Updating with zero values or complex expressions demands extra boilerplate
+- Managing associations involves verbose code to maintain foreign keys or join tables
+
+Field helpers address these pain points by generating ready-to-use, strongly typed wrappers directly linked to your Go models:
+
+- **Eliminate magic strings:** column names are generated safely, matching your struct fields
+- **Ensure compile-time safety:** passing wrong types or column names fails to compile
+- **Support expressive SQL expressions:** easy chaining of predicates like `Eq`, `Gt`, `In`, and others
+- **Simplify updates:** use `Set`, `SetExpr`, and convenient increment/decrement methods
+- **Handle associations with clarity:** special association helpers for common patterns like `Create`, `Unlink`, and `Delete`
+
+---
+
+## Core Features of Model-Driven Field Helpers
+
+### 1. Strongly Typed Field Wrappers
+Each model field maps to a helper variable of a generic field type that wraps the column name and provides methods:
+
+- **Basic fields:** `field.Field[T]`, `field.String`, `field.Number[int|uint]`, `field.Time`, `field.Bool`, etc.
+- **Nullable and custom types:** Wrapped with matching helpers supporting nullable SQL semantics.
+- **Associations:** `field.Struct[T]` for single-object relations, `field.Slice[T]` for collections.
+
+### 2. Expressive Query Conditions
+Helpers expose fluent methods to generate standard SQL predicates effortlessly:
+
+- Equality and inequality: `.Eq(value)`, `.Neq(value)`
+- Range and comparison: `.Gt(value)`, `.Gte(value)`, `.Lt(value)`, `.Lte(value)`
+- Pattern matching: `.Like(pattern)`, `.ILike(pattern)`
+- Set membership: `.In(values...)`, `.NotIn(values...)`
+- NULL checks: `.IsNull()`, `.IsNotNull()`
+
+Example:
+```go
+// WHERE name = 'alice' AND age BETWEEN 18 AND 30
+gorm.G[User](db).
+  Where(generated.User.Name.Eq("alice"), generated.User.Age.Between(18, 30)).
+  Find(ctx)
+```
+
+### 3. Update Assignments with Precision
+For updates, helpers create assignment expressions:
+
+- `.Set(value)` to assign a direct value
+- `.SetExpr(expr)` for SQL expressions (e.g., increment)
+- Increment helpers like `.Incr(n)` for numeric fields
+
+Example:
+```go
+// Increment age by 1 and set role to "active"
+gorm.G[User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(
+    generated.User.Age.Incr(1),
+    generated.User.Role.Set("active"),
+  ).
+  Update(ctx)
+```
+
+### 4. Ordering and Sorting Helpers
+Easily specify sort order using:
+
+- `.Asc()` for ascending order
+- `.Desc()` for descending order
+- `.OrderExpr()` for custom sorting SQL
+
+Example:
+```go
+// ORDER BY created_at DESC
+gorm.G[User](db).
+  Order(generated.User.CreatedAt.Desc()).
+  Find(ctx)
+```
+
+### 5. Association Operations Made Simple
+Association fields generate specialized helpers enabling composite CRUD semantics:
+
+- **Create:** create and link associated records
+- **CreateInBatch:** batch create linked records
+- **Update:** update linked associated records conditionally
+- **Unlink:** remove association without deleting rows
+- **Delete:** delete associated records or join rows
+
+Example:
+```go
+// Create user with one pet
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+---
+
+## Real-World Usage Examples
+
+### Filtering with Field Helpers
+Suppose you want all active users older than 18:
+
+```go
+users, err := gorm.G[User](db).
+  Where(
+    generated.User.Age.Gt(18),
+    generated.User.Role.Eq("active"),
+  ).
+  Find(ctx)
+```
+
+### Updating Records with Zero Values and Expressions
+Set multiple fields including zero-values and increment age by 2:
+
+```go
+rows, err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("cathy")).
+  Set(
+    generated.User.Role.Set(""),      // zero value string
+    generated.User.IsAdult.Set(false),  // zero bool
+    generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{2}}),
+  ).
+  Update(ctx)
+```
+
+### Managing Associations
+Create a user with associated pets and languages:
+
+```go
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("polyglot"),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+Unlink a pet from a user:
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+---
+
+## Best Practices
+
+- **Use generated helpers consistently** to prevent SQL injection and enable autocomplete and compile-time checks.
+- **Leverage association helpers** to simplify complex linked data operations and maintain FK integrity.
+- **Combine zero-value updates and expressions in a single `Set(...)`** call for concise, atomic updates.
+- **Utilize ordering helpers** to keep query intent clear and avoid raw SQL strings.
+- **Define your models carefully** to enable optimal generation of helpers, including explicit association definitions.
+
+---
+
+## Troubleshooting Common Pitfalls
+
+<AccordionGroup title="Troubleshooting Common Issues">  
+<Accordion title="Generated Field Helpers Not Matching Expected Fields">  
+Check that your model structs are properly exported and located in packages included in generation config filters. Only exported fields generate helpers. Also, confirm that custom field type mappings are configured if you use special field types.
+</Accordion>  
+<Accordion title="Association Helper Usage Fails to Compile">  
+Verify that associations are correctly declared in models (has one, has many, belongs to, many2many). Ensure you use the appropriate helper type (`field.Struct` for single, `field.Slice` for collections) on associations.
+</Accordion>  
+<Accordion title="Zero Values Not Persisting on Updates">  
+Use `.Set()` explicitly with zero values to instruct the update operation to persist them. Do not rely on zero values being automatically updated.
+</Accordion>  
+<Accordion title="SQL Injection Concerns">  
+Always use generated helpers and parameterized methods like `.Eq()`, `.Where()`, `.Set()`. Avoid concatenating raw SQL strings for queries or updates.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Getting Started Preview
+
+### Quick Start
+1. Define your GORM model structs with appropriate fields and associations.
+2. Run GORM CLI to generate code, which includes the field helpers.
+3. Use the generated helpers for safe, expressive queries and updates as shown in the examples.
+
+### Prerequisites
+- Go 1.18+ (for generics support)
+- Models defined as exported structs with GORM tags as needed
+
+### Next Steps
+Explore the [Type-Safe Query APIs](https://your-docs-link/overview/feature-tour/query-api-overview) page to combine model-driven helpers with interface-driven query generation. For advanced customization, visit the [Configuring Generation](https://your-docs-link/overview/feature-tour/customization-config) page.
+
+---
+
+## Additional Resources
+- [Using Model-Driven Field Helpers Guide](../guides/core-getting-started/field-helper-basics)
+- [Working with Associations](../guides/core-getting-started/association-operations)
+- [Best Practices and Patterns](../guides/practices-integration/practices-patterns)
+
+---
+
+For implementation details and examples, see the [generated code examples](https://github.com/go-gorm/cli/tree/main/examples/output) in the official repository.
+
+
+---
