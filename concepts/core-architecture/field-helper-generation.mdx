@@ -1,0 +1,226 @@
+---
+title: "Field Helpers: Type-Safe Predicates & Setters"
+description: "See how GORM CLI creates type-safe field helpers for filters, ordering, updates, and associations. Understand what kinds of struct fields generate helpers, how associations are discovered, and how expression builders ensure compile-time safety."
+---
+
+# Field Helpers: Type-Safe Predicates & Setters
+
+GORM CLI generates **field helpers** from your Go model structs to provide a type-safe, fluent API for building filters, ordering clauses, update setters, and managing associations. This page breaks down how these helpers are created, what kinds of struct fields trigger helper generation, how associations are recognized, and how expression builders keep your code safe at compile time.
+
+---
+
+## Introduction
+
+When working with databases in Go through GORM, crafting flexible and safe filters or updates usually involves writing raw SQL or using GORM’s chainable clauses directly. The GORM CLI dramatically simplifies this by **generating statically typed field helpers** for all your model’s fields, so you can write expressive, error-free queries with compile-time guarantees.
+
+These helpers cover:
+
+- **Predicates**: Type-checked conditions like equality, range, pattern matching
+- **Setters**: Safe update value assignments
+- **Association operations**: Creating, updating, unlinking, or deleting related rows
+
+Imagine writing `generated.User.Age.Gt(18)` instead of a manual where clause string — this ensures you never mistype your column names or use the wrong data types.
+
+---
+
+## Which Struct Fields Generate Helpers?
+
+Field helpers are generated for every **exported field** in your Go model structs, with some rules:
+
+- **Basic scalar fields** such as `string`, `int`, `float64`, `bool`, `time.Time`, and `[]byte` get mapped to corresponding typed helpers like `field.String`, `field.Number[int]`, `field.Bool`, `field.Time`, or `field.Bytes`.
+- **Named types implementing certain interfaces** (`Scanner`, `Valuer`, or GORM `SerializerInterface`) are also supported and mapped to generic `field.Field[T]` types.
+- **Struct fields representing associations** generate special association helpers:
+  - Fields with a single struct type become `field.Struct[T]` helpers (e.g., `has one` or `belongs to`)
+  - Fields with slice types (`[]T`) become `field.Slice[T]` helpers (e.g., `has many` or `many2many`)
+
+### How are DB Column Names Determined?
+
+Field helpers use the `gorm:"column:..."` tag value if present to determine the exact database column column name for predicates and setters. Otherwise, GORM’s naming strategy applies a default naming convention.
+
+---
+
+## Generated Predicate API — Building Filters
+
+Each field helper offers predicates tailored to the type:
+
+- **String fields** provide predicates like `Eq()`, `Ne()`, `Like()`, `In()`, and `IsNull()`.
+- **Numeric fields (`int`, `float`)** provide additional operators `Gt()`, `Lt()`, `Between()`, `Incr()`, etc.
+- **Boolean fields** allow equality checks and `IsTrue()`/`IsFalse()`.
+- **Time fields** include `Before()`, `After()`, `Between()` predicates.
+
+Example usage:
+
+```go
+// Query users older than 18
+users, err := gorm.G[User](db).
+    Where(generated.User.Age.Gt(18)).
+    Find(ctx)
+
+// Filter by partial name match
+users, err := gorm.G[User](db).
+    Where(generated.User.Name.Like("%jinzhu%"))
+    .Find(ctx)
+```
+
+These helpers automatically generate safe SQL clauses and prevent issues like misspelled column names or type mismatches.
+
+---
+
+## Setters for Updates and Creates
+
+Field helpers let you build strongly typed update and create setter lists via the `Set(...)` method on `gorm.G[T]`. They support:
+
+- **Setting explicit values** using `.Set(value)`
+- **Incrementing numeric fields** with `.Incr(amount)`
+- **Setting expressions** when you need custom SQL functions
+
+Example:
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Name.Set("jinzhu"),
+    generated.User.Age.Incr(1),
+  ).
+  Update(ctx)
+
+// Create a user with zero or false values safely
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Age.Set(0),
+    generated.User.IsActive.Set(false),
+  ).
+  Create(ctx)
+```
+
+Zero values (`0`, `false`, `""`) are handled correctly without being ignored, avoiding subtle bugs.
+
+---
+
+## Associations: Relation Field Helpers
+
+GORM CLI detects associations from your struct fields and generates specialized helpers:
+
+- `field.Struct[T]` for `has one`, `belongs to` relations
+- `field.Slice[T]` for `has many` and `many2many` relations
+
+These helpers support compound operations linked to a parent entity:
+
+- **Create**: Insert and link new related rows
+- **Update**: Update existing related rows with filter conditions
+- **Unlink**: Remove association without deleting rows (e.g., NULL FK or remove join rows)
+- **Delete**: Delete associated rows according to association type
+- **CreateInBatch**: Batch create and link multiple related rows
+
+Example:
+
+```go
+// Create user with one pet
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Update pet's name where pet's current name is 'fido'
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+// Unlink pet (removes foreign keys or join rows without deleting pet)
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+### Semantics By Association Type
+
+| Association Type | Unlink Semantics                   | Delete Semantics        |
+|------------------|----------------------------------|------------------------|
+| belongs to       | Sets parent FK to NULL            | Deletes associated rows |
+| has one / many   | Sets child FK to NULL             | Deletes child rows      |
+| many2many        | Removes join rows only            | Removes join rows only  |
+
+---
+
+## How Expression Builders Ensure Compile-Time Safety
+
+Field helpers return **GORM clause.Expression** implementations, enabling the fluent composition of complex queries without direct SQL strings.
+
+Because these are **strongly typed fields**, the Go compiler guarantees:
+
+- Field names match exactly with model fields and database columns
+- Values passed are compatible with the field's Go type
+- Association operations are only valid on supported relation types
+
+This **prevents runtime errors** due to typos, wrong column names, or type mismatches,
+reducing bugs and runtime panics in your database layer.
+
+---
+
+## Practical Tips & Best Practices
+
+- **Use field helpers in Where and Set clauses**: They fit naturally in GORM’s chainable API for composable queries.
+- **Zero values are always handled correctly**: No silent omission of zero or false values.
+- **Customize generated names with `gorm:"column:..."` tags**: Keeps your SQL consistent with legacy schema.
+- **Configure type mappings and field name mappings** with generation configs to tailor helper types.
+- **Leverage generated association helpers** for precise and safe relation data manipulation.
+
+---
+
+## Common Pitfalls to Avoid
+
+- Assuming unexported (private) fields will generate helpers — only exported fields do
+- Overlooking association nuances (unlink vs delete semantics)
+- Forgetting to add `context.Context` in your interface method definitions (usually added automatically by the generator)
+
+---
+
+## Summary Diagram: Field Helper Generation Flow
+
+```mermaid
+flowchart TD
+  A[Go Model Struct] --> B[Identify Exported Fields]
+  B --> C{Field Type}
+
+  C -->|Basic scalar| D[Generate Scalar Field Helpers
+(field.String, field.Number[T], etc)]
+  C -->|Named type with Scanner/Valuer| E[Generate Generic Field[T] Helper]
+  C -->|Slice type| F[Generate Association: field.Slice[T]]
+  C -->|Struct type| G[Generate Association: field.Struct[T]]
+
+  D --> H[Predicates & Setters]
+  E --> H
+  F --> I[Association Operations]
+  G --> I
+
+  H & I --> J[Type-safe expression builders for queries and updates]
+``` 
+
+---
+
+## Next Steps
+
+- To apply field helpers effectively, see the guide on [Using Field Helpers for Filters & Updates](/guides/core-workflows/using-field-helpers).
+- Learn how to write SQL-annotated Query Interfaces that produce complementary type-safe APIs in [Writing Type-Safe Queries from Interfaces](/guides/core-workflows/writing-type-safe-queries).
+- For managing complex relations, explore [Association Operations](/guides/core-workflows/association-operations).
+
+---
+
+## Additional Resources
+
+- [GORM CLI Quick Start and Concepts](https://github.com/go-gorm/cli#readme)
+- [Customizing Generation Config](https://gorm.io/docs/gen_config.html)
+- [Examples & Reference](https://github.com/go-gorm/cli/tree/main/examples)
+
+
+---
+
+This guide empowers you to confidently use GORM CLI’s field helpers to build robust, maintainable, and type-safe database queries and updates with ease.

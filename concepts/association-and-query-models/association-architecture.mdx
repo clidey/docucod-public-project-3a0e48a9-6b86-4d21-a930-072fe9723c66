@@ -1,0 +1,291 @@
+---
+title: "Associations: Types and Operations"
+description: "Understand belongs-to, has-one, has-many, and many-to-many as modeled by GORM CLI, including polymorphic associations. See how association helpers are generated and how unlink, delete, update, and create operations are expressed in a fluent interface."
+---
+
+# Associations: Types and Operations
+
+Understand GORM CLI's support for association types — belongs-to, has-one, has-many, and many-to-many — including polymorphic associations. Learn how generated association helpers facilitate key operations like create, update, unlink, delete, and batch create, all exposed through a clear, fluent, and type-safe API.
+
+---
+
+## Introduction to Associations
+
+Associations express relationships between models in GORM and are critical for managing related data records efficiently. GORM CLI recognizes these relationships from your Go model structs and generates association helpers that allow you to perform operations safely and expressively.
+
+The common association types modeled by GORM CLI include:
+
+- **Belongs To**: A child model holds a foreign key (FK) referencing the parent.
+- **Has One**: A parent owns one child record linked by a FK.
+- **Has Many**: A parent owns multiple child records linked by a FK.
+- **Many To Many**: Two models connected through a join table for multiple associations.
+- **Polymorphic Associations**: Single association where one model can belong to multiple others via type and ID.
+
+These association types are incorporated into field helpers generated from your models, enabling safe, fluent interaction through the CLI-generated API.
+
+---
+
+## Association Helpers: What They Are and How They Work
+
+Each association generates typed helpers accessible on the model's generated field helpers. These helpers come in two main forms:
+
+- `field.Struct[T]` for single associations (belongs to, has one)
+- `field.Slice[T]` for collections (has many, many-to-many)
+
+They provide methods representing operations to:
+
+- **Create** new associated records and link them
+- **CreateInBatch** for batch creation/linking
+- **Update** associated records with optional filtering
+- **Unlink** associations without deleting records
+- **Delete** associated records (or join rows for many-to-many)
+
+These operations are expressed as `clause.Association` structures internally but exposed as fluent methods for your convenience.
+
+
+---
+
+## Semantics by Association Type
+
+Understanding the exact behavior of each operation per association type clarifies what happens during database operations.
+
+| Operation | Belongs To                                   | Has One / Has Many                           | Many To Many                               |
+|-----------|---------------------------------------------|---------------------------------------------|--------------------------------------------|
+| Create    | Creates and sets FK in child pointing to parent | Creates child record(s) and sets FK to parent | Creates records and inserts join table rows |
+| CreateInBatch | Same as Create but for multiple records       | Batch creates child records linked to parent | Batch creates and links via join table     |
+| Update    | Updates parent records via child reference   | Updates child record(s) matching conditions | Updates related records (join table unaffected) |
+| Unlink    | Sets parent's FK to NULL (sever link)        | Sets child's FK to NULL (disassociates)    | Deletes join table rows only (keeps records)  |
+| Delete    | Deletes associated parent rows               | Deletes child rows                           | Deletes join rows only (records stay intact) |
+
+
+---
+
+## Using Association Helpers with Fluent API
+
+The generated helpers enable chaining calls in an intuitive manner within a `Set(...).Update(ctx)` or `Set(...).Create(ctx)` context on the parent query builder.
+
+### Create and Associate a Single Child (Has One / Belongs To)
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Account.Create(generated.Account.Number.Set("A-001")),
+  ).
+  Create(ctx)
+```
+This inserts a new user and creates a linked Account record simultaneously.
+
+
+### Create and Associate Many Children (Has Many / Many To Many)
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.CreateInBatch([]models.Pet{{Name: "fido"}, {Name: "rex"}}),
+  ).
+  Update(ctx)
+```
+Batch creates and links multiple pets to the user with ID 1.
+
+
+### Update Associated Records With Conditions
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(
+      generated.Pet.Name.Set("fido-updated"),
+    ),
+  ).
+  Update(ctx)
+```
+Updates pet named 'fido' associated with user ID 1.
+
+
+### Unlink Associated Records
+
+Unlink clears the association link without deleting child records (e.g., sets foreign keys to NULL or removes join table rows).
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+### Delete Associated Records
+
+Deletes the associated records or join table rows.
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+```
+
+---
+
+## Polymorphic Associations
+
+Polymorphic associations allow one model to belong to multiple other models through type and ID columns. For example, `Pet.Toy` is polymorphic with fields `OwnerID` and `OwnerType` identifying the owning record.
+
+The generated helper supports the same operations but handles foreign keys with polymorphic semantics.
+
+Example:
+
+```go
+gorm.G[Pet](db).
+  Where(generated.Pet.ID.Eq(1)).
+  Set(
+    generated.Pet.Toy.Create(generated.Toy.Name.Set("ball")),
+  ).
+  Update(ctx)
+
+// Update
+gorm.G[Pet](db).
+  Where(generated.Pet.ID.Eq(1)).
+  Set(generated.Pet.Toy.Where(generated.Toy.Name.Eq("ball")).Update(generated.Toy.Name.Set("cube"))).
+  Update(ctx)
+
+// Unlink (sets OwnerID and OwnerType in Toy to zero values)
+gorm.G[Pet](db).
+  Where(generated.Pet.ID.Eq(1)).
+  Set(generated.Pet.Toy.Unlink()).
+  Update(ctx)
+
+// Delete
+gorm.G[Pet](db).
+  Where(generated.Pet.ID.Eq(1)).
+  Set(generated.Pet.Toy.Delete()).
+  Update(ctx)
+
+```
+
+---
+
+## How Association Operations Work Internally
+
+Association helpers build `clause.Association` structures describing the intended operation, conditions, target fields, and values. You pass these as arguments to `Set(...)` on a parent model builder, then invoke `Create(ctx)` or `Update(ctx)` to execute:
+
+- **Create(ctx)** inserts parent records and then applies association `Create` operations.
+- **Update(ctx)** updates matched parent records and applies association operations (`Create`, `Update`, `Unlink`, `Delete`).
+
+This flow guarantees safe, atomic handling of related data, abstracting foreign key details and join tables.
+
+
+---
+
+## Practical Tips and Common Pitfalls
+
+- **Always specify filtering conditions** on updates, unlinks, and deletes to avoid unintentional mass modifications of associated records.
+- **Unlink vs Delete**: Use unlink to sever relations without deleting data; delete removes associated records (or join rows). For many2many, delete removes only join records.
+- **Batch Creation** is supported where backend and association type allow for efficient linking.
+- For **polymorphic associations**, ensure your model tags and generated helpers align correctly.
+- Use **generated predicates and setters** for safety and to prevent SQL injection or malformed queries.
+
+---
+
+## Example: Full Workflow with Associations
+
+```go
+ctx := context.Background()
+
+// Create user with an associated pet and languages (many2many)
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("polyglot-alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("rex")),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Create(ctx)
+
+// Update the pet where name='rex' for user with ID=1
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("rex")).Update(generated.Pet.Name.Set("rex-updated")),
+  ).
+  Update(ctx)
+
+// Unlink all pets from user ID=1
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete all linked languages for user ID=1
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Languages.Delete()).
+  Update(ctx)
+```
+
+---
+
+## Summary
+
+This page has introduced you to GORM CLI’s model-driven association helpers—how they manifest from Go structs, the types of relationships supported, and the fluent API operations you can perform on them. By using the generated API, you gain compile-time safety and convenient, expressive methods to manage complex data relationships with clarity and confidence.
+
+---
+
+## Related Topics
+
+- [Associations: Types and Operations](#) — This page
+- [Managing Associations with Helpers](/guides/core-workflows/association-operations) — Practical guide with usage patterns
+- [Field Helpers: Type-Safe Predicates & Setters](/concepts/core-architecture/field-helper-generation) — Learn about the underlying predicate and setter fields
+- [Writing Type-Safe Queries from Interfaces](/guides/core-workflows/writing-type-safe-queries) — For combining with query interface usage
+
+---
+
+## Diagram: Association Operations Flow
+
+```mermaid
+flowchart TD
+
+  parentQuery["Parent Query Builder"] -->|Set(...)| associationHelper["Association Helper"]
+  associationHelper --> |Create/Update/Unlink/Delete| dbOp[("Database Operation")]
+  dbOp --> db[("Database")]
+  
+  subgraph "Association Operations"
+    CreateOp["Create Association"]
+    UpdateOp["Update Association"]
+    UnlinkOp["Unlink Association"]
+    DeleteOp["Delete Association"]
+    CreateInBatchOp["Batch Create Association"]
+  end
+
+  associationHelper --> CreateOp
+  associationHelper --> UpdateOp
+  associationHelper --> UnlinkOp
+  associationHelper --> DeleteOp
+  associationHelper --> CreateInBatchOp
+
+  CreateOp --> dbOp
+  UpdateOp --> dbOp
+  UnlinkOp --> dbOp
+  DeleteOp --> dbOp
+  CreateInBatchOp --> dbOp
+
+  dbOp -->|Return| parentQuery
+
+  %% Style
+  classDef dbNode fill:#f9f,stroke:#333,stroke-width:1px;
+  class db,dbOp dbNode;
+```
+
+---
+
+_Server-side generated association helpers let you seamlessly create, update, unlink, or delete related data, while you focus on your domain logic._
+
+
+<Check>
+Remember: Always use the generated predicates, setters, and association helpers for type safety and to avoid SQL injection or runtime errors when managing associations with GORM CLI.
+</Check>
+
+<Warning>
+Avoid performing association operations without specifying filtering conditions unless you intend to affect all associated records — this prevents accidental data loss or unintended mass updates.
+</Warning>

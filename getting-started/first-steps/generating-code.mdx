@@ -1,0 +1,211 @@
+---
+title: "Generating Your First Code"
+description: "Step-by-step walkthrough of running GORM CLI's code generation command, explaining input/output flags, expected outputs, and mapping generated files to user code. Includes sample command lines and file structure."
+---
+
+# Generating Your First Code
+
+This guide walks you through running the GORM CLI code generation command. You'll learn how to specify input and output locations, understand the generated file structure, and map these generated artifacts back to your original source code. This step-by-step walkthrough is designed to help you get immediate results with the GORM CLI generator.
+
+---
+
+## 1. Prepare Your Input
+
+Before generating code, ensure you have the following:
+
+- A Go interface file (or directory) containing interfaces annotated with raw SQL queries in comments.
+- Your corresponding Go model structs defined in the same package or directory.
+- Optional configuration via a package-level `genconfig.Config` for custom output paths or field mappings (see [Basic Configuration Setup](./basic-configuration)).
+
+If you have a single file, you can generate from just that; if you have multiple files or an entire package, point to the directory.
+
+
+## 2. Run the GORM CLI `gen` Command
+
+Launch the generation using the CLI with the `gen` command:
+
+```bash
+gorm gen -i <input_path> -o <output_directory>
+```
+
+- `-i` / `--input` (required): Path to the Go source file or directory containing your interfaces and models.
+- `-o` / `--output`: Directory where the generated code will be placed. Defaults to `./g`.
+
+### Example
+
+Assuming your code is under `./examples` and you want generated files in `./generated`:
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+This command processes the input directory recursively, parses your Go files, and generates type-safe query APIs and field helpers in the output directory, preserving relative paths.
+
+
+## 3. Understand Expected Output
+
+Upon successful generation, the tool produces:
+
+- **Interface-driven query APIs**:
+  - Generated for each Go interface with annotated SQL templates.
+  - Located in files mirroring your input directory structure inside the specified output path.
+  - Each interface method becomes a type-safe Go method with context-aware signatures.
+
+- **Model-driven field helpers**:
+  - Generated for every struct detected.
+  - Provides strongly typed fields for querying and updating, reflecting your model's database columns and associations.
+
+### Example Output File Structure
+
+If your input contains `examples/query.go` and models in `examples/models/user.go`, the generated output might look like:
+
+```
+generated/
+  ├── query.go       # Generated APIs for Query interfaces
+  └── models/
+       └── user.go   # Generated field helpers for User struct
+```
+
+In your Go code, you then import and use these generated packages to perform fluent, compile-time safe query and update operations.
+
+
+## 4. What Happens During Generation
+
+Under the hood (for your understanding):
+
+- Parses input Go files and directories, traversing all relevant Go files.
+- Extracts interfaces and looks for structured SQL annotations in comments.
+- Extracts model structs and their fields, also respecting any custom tags or configuration.
+- Applies include/exclude filters and output configuration from any discovered `genconfig.Config`.
+- Generates formatted, idiomatic Go code using templates.
+- Formats generated code and writes files preserving your directory structure under the output path.
+
+You can watch the CLI output for confirmations like:
+
+```
+Generating file ./generated/query.go from /path/to/examples/query.go...
+Generating file ./generated/models/user.go from /path/to/examples/models/user.go...
+```
+
+
+## 5. Mapping Generated Code to Your Source
+
+- Each generated file corresponds to your input file, preserving package and relative placement.
+- The generated code exposes:
+  - An interface factory function for each query interface, e.g., `Query[T any](db, opts...) QueryInterface[T]`.
+  - Concrete implementations with the methods annotated in your source interfaces.
+  - A global variable struct for each model, exposing fields to build predicates and updates, e.g., `User.Name`, `User.Age`.
+
+Use these generated symbols to build queries or updates with full static type checking and IDE autocomplete.
+
+
+## 6. Sample Command and Sample Output
+
+### Sample Interface Input
+```go
+// examples/query.go
+package examples
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+}
+```
+
+### Run Generation
+```bash
+gorm gen -i ./examples/query.go -o ./generated
+```
+
+### Sample Generated Code (Abbreviated)
+```go
+package examples
+
+import (
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/cli/gorm/field"
+)
+
+func Query[T any](db *gorm.DB, opts ...clause.Expression) _QueryInterface[T] {
+	return _QueryImpl[T]{Interface: gorm.G[T](db, opts...) }
+}
+
+type _QueryInterface[T any] interface {
+	gorm.Interface[T]
+	GetByID(ctx context.Context, id int) (T, error)
+}
+
+type _QueryImpl[T any] struct {
+	gorm.Interface[T]
+}
+
+func (e _QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+	var result T
+	err := e.Raw("SELECT * FROM ? WHERE id=?", clause.Table{Name: clause.CurrentTable}, id).Scan(ctx, &result)
+	return result, err
+}
+```
+
+
+## 7. Best Practices and Tips
+
+- Always specify the correct input path pointing to your interface and model location.
+- Use a dedicated output directory to avoid overwriting your source code.
+- If your package has multiple files, generate from the root directory to include all relevant files.
+- Leverage `genconfig.Config` for advanced control like field helper mappings or include/exclude patterns.
+- Use a `.gitignore` or similar to exclude generated code from source control as needed.
+- Regularly regenerate when your interfaces or models change to keep code in sync.
+
+
+## 8. Troubleshooting
+
+<AccordionGroup title="Common Issues During Code Generation">
+<Accordion title="Missing or Invalid Input Path">
+Ensure the path passed with `-i` exists and points to valid Go source files or directories.
+A common error is a typo or missing files.
+</Accordion>
+<Accordion title="No Generated Files Appear">
+Check if your interfaces have proper SQL annotations in comments.
+Without these, the generator skips method generation.
+Also, ensure your structs and interfaces are exported.
+</Accordion>
+<Accordion title="Output Directory Not Created or Files Not Written">
+Verify you have write permissions for the output directory.
+Ensure the CLI can create directories recursively.
+</Accordion>
+<Accordion title="Syntax Errors in Generated Code">
+Typically due to incorrect or unsupported SQL template syntax in interface comments.
+Verify your SQL templates follow the documented DSL.
+</Accordion>
+</AccordionGroup>
+
+
+## 9. Next Steps
+
+- Explore how to use the generated APIs in your application: see [Using the Generated APIs](./using-generated-apis).
+- Learn how to customize code generation via configuration: see [Basic Configuration Setup](./basic-configuration).
+- Deepen your understanding of SQL templates and interface-driven queries: see [Writing Type-Safe Queries from Interfaces](../../concepts/association-and-query-models/query-interfaces-and-sql-templates).
+
+---
+
+## References
+
+- [Basic Configuration Setup](./basic-configuration): Configure generation behavior
+- [Using the Generated APIs](./using-generated-apis): How to consume your generated code
+- [Installation Guide](../welcome-and-installation/installation): How to install and verify GORM CLI
+- [Product Purpose and Value](../../overview/product-intro-value/product-purpose): Understand the broader context
+
+
+---
+
+<Tip>
+The `gorm gen` command is your gateway to type-safe, fluent query and update code. Running it successfully transforms your raw Go interfaces and models into powerful, compile-time checked tools — saving countless hours of debugging and boilerplate coding.
+</Tip>
+
+<Check>
+To verify success, look for confirmation messages during generation and check the output directory for generated `.go` files matching your input directory structure.
+Ensure you can import and use those generated packages without compilation errors.
+</Check>
+
+---

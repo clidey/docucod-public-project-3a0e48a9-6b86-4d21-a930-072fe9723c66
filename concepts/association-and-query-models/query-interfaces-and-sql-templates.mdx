@@ -1,0 +1,259 @@
+---
+title: "Query Interfaces & SQL Templates"
+description: "Learn the mechanics of interface-driven query generation using SQL-like comments and template directives. Discover the custom SQL template DSL, placeholder binding, and how templates adapt queries safely to your model and context."
+---
+
+# Query Interfaces & SQL Templates
+
+Learn the mechanics of interface-driven query generation using SQL-like comments and template directives. Discover the custom SQL template DSL, placeholder binding, and how templates adapt queries safely to your model and context.
+
+---
+
+## Introduction
+
+GORM CLI empowers you to define your data access logic declaratively through Go interfaces annotated with SQL templates within method comments. This interface-driven approach generates fully type-safe, expressive query APIs tailored to your models, bridging raw SQL flexibility with Go’s compile-time safety.
+
+This page dives into how query interfaces are defined, the specialized SQL template DSL you use inside comments, how parameters bind safely into SQL, and how the code generator transforms these into efficient, ready-to-use query methods.
+
+---
+
+## Understanding Query Interfaces
+
+A **query interface** in GORM CLI is a generic Go interface parameterized by your model type (e.g., `T any`). Each method corresponds to a database operation described by embedded SQL or directive templates in the method doc comments.
+
+### Key Points About Query Interfaces:
+
+- **Generic Design:** Each interface method returns or operates on the generic type `T`, which corresponds to your model struct.
+- **SQL Templates in Comments:** The actual SQL statement is embedded in the method’s comment (docstring), using a DSL enhanced with templating directives.
+- **Automatic Context Injection:** If the method doesn’t declare a context parameter, the generator automatically adds `ctx context.Context` to method signatures.
+- **Return Types:** Methods can return a model (`T`), a slice of models (`[]T`), or an error. The pattern enforces idiomatic Go style with error as the last return value.
+
+### Example Interface
+
+```go
+// Query defines database operations for User
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{if user.ID > 0}}
+  //       WHERE id=@user.ID
+  //   {{else if user.Name != ""}}
+  //       WHERE name=@user.Name
+  //   {{end}}
+  // {{end}}
+  QueryWith(user models.User) (T, error)
+
+  // UPDATE @@table
+  //  {{set}}
+  //    {{if user.Name != ""}} name=@user.Name, {{end}}
+  //    {{if user.Age > 0}} age=@user.Age, {{end}}
+  //    {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+  //  {{end}}
+  // WHERE id=@id
+  UpdateInfo(user models.User, id int) error
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{for _, user := range users}}
+  //     {{if user.Name != "" && user.Age > 0}}
+  //       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+  //     {{end}}
+  //   {{end}}
+  // {{end}}
+  Filter(users []models.User) ([]T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+
+  // SELECT * FROM @@table
+  //  {{where}}
+  //    {{if !start.IsZero()}}
+  //      created_at > @start
+  //    {{end}}
+  //    {{if !end.IsZero()}}
+  //      AND created_at < @end
+  //    {{end}}
+  //  {{end}}
+  FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+---
+
+## SQL Template DSL
+
+GORM CLI provides a specialized, Go templating-powered SQL domain-specific language (DSL) embedded in interface comments. This DSL offers powerful directives to construct dynamic, safe, and readable SQL statements.
+
+### Core Template Directives
+
+| Directive   | Purpose                              | Example                                   |
+|-------------|------------------------------------|-------------------------------------------|
+| `@@table`   | Resolves to table name of the model | `SELECT * FROM @@table WHERE id=@id`     |
+| `@@column`  | Placeholder for a column name         | `WHERE @@column=@value`                    |
+| `@param`    | Placeholder binds Go method param    | `WHERE name=@user.Name`                    |
+| `{{where}}` | Conditional WHERE clause builder      | `{{where}} age > 18 {{end}}`               |
+| `{{set}}`   | Conditional SET clause for UPDATE     | `{{set}} name=@name {{end}}`               |
+| `{{if}}`    | Conditional logic inside templates    | `{{if age > 0}} AND age=@age {{end}}`    |
+| `{{else if}}`| Else-if branch for conditions        | `{{else if user.Name != ""}} ... {{end}}`|
+| `{{else}}` | Else branch in conditions             | `{{else}} ... {{end}}`                     |
+| `{{for}}`   | Loop over collections                 | `{{for _, tag := range tags}} ... {{end}}` |
+
+### How Placeholders Work
+
+- `@param` placeholders correspond to Go method parameters. They bind safely as SQL parameters, preventing injection and ensuring correct type mapping.
+- `@@table` and `@@column` enable dynamic model-aware SQL generation — making queries reusable across models.
+
+### Example Usage
+
+```sql
+SELECT * FROM @@table WHERE id=@id AND status=@status
+
+SELECT * FROM @@table WHERE @@column=@value
+
+SELECT * FROM @@table
+{{where}}
+  {{if name != ""}} name=@name {{end}}
+  {{if age > 0}} AND age=@age {{end}}
+{{end}}
+
+UPDATE @@table
+{{set}}
+  {{if user.Name != ""}} name=@user.Name, {{end}}
+  {{if user.Email != ""}} email=@user.Email {{end}}
+{{end}}
+WHERE id=@id
+
+SELECT * FROM @@table
+{{where}}
+  {{for _, tag := range tags}}
+    {{if tag != ""}} tags LIKE concat('%',@tag,'%') OR {{end}}
+  {{end}}
+{{end}}
+```
+
+---
+
+## How the Code Generator Uses Your Query Interfaces
+
+When you run `gorm gen` on your interfaces and models, GORM CLI:
+
+1. Parses interfaces and extracts methods including comments containing SQL templates.
+2. Processes the templates, replacing directives and injecting safe parameter binding logic.
+3. Generates strongly-typed Go methods implementing the interface, returning fluent APIs or data results.
+
+This results in generated files containing code like:
+
+```go
+func Query[T any](db *gorm.DB, opts ...clause.Expression) _QueryInterface[T] {
+    return _QueryImpl[T]{Interface: gorm.G[T](db, opts...) }
+}
+
+type _QueryInterface[T any] interface {
+    gorm.Interface[T]
+    GetByID(ctx context.Context, id int) (T, error)
+    FilterWithColumn(ctx context.Context, column string, value string) (T, error)
+    ...
+}
+
+type _QueryImpl[T any] struct {
+    gorm.Interface[T]
+}
+
+func (e _QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+    var sb strings.Builder
+    params := make([]any, 0, 2)
+
+    sb.WriteString("SELECT * FROM ? WHERE id=? AND name = \"@name\"") // template rendered
+    params = append(params, clause.Table{Name: clause.CurrentTable}, id)
+
+    var result T
+    err := e.Raw(sb.String(), params...).Scan(ctx, &result)
+    return result, err
+}
+```
+
+---
+
+## Practical User Flow
+
+1. **Define your Query Interfaces:** Write generic interfaces with methods documenting SQL via DSL templates.
+2. **Run Generation:** Use `gorm gen -i ./path/to/interfaces -o ./generated` to generate code.
+3. **Use Generated APIs:** Instantiate generated query methods and call strongly-typed methods directly in your application.
+
+Example:
+
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+if err != nil {
+  // handle error
+}
+
+// Complex query with dynamic filters
+users, err := generated.Query[User](db).Filter(usersList).Find(ctx)
+```
+
+---
+
+## Best Practices & Tips
+
+- **Write Clear SQL Comments:** Your SQL in comments should be syntactically valid and use the template DSL directives correctly.
+- **Use Parameter Placeholders Consistently:** Always use `@param` syntax for binding parameters to ensure SQL safety.
+- **Leverage Conditional Blocks:** Use `{{where}}`, `{{set}}`, and conditional `{{if}}` blocks to create dynamic queries that respond to input.
+- **Name Interfaces and Methods Meaningfully:** Keep method names descriptive to clarify operation intent, which also helps maintainability.
+- **Check Generated Code:** After generation, review the generated methods for syntax and logical correctness.
+- **Use Context Correctly:** Always pass the `ctx context.Context` parameter when invoking generated methods.
+
+---
+
+## Common Pitfalls & Troubleshooting
+
+<AccordionGroup title="Troubleshooting Query Interface Issues">
+<Accordion title="Method Returns Without Error Result">
+Methods with raw SQL templates must return an error as the last result. Ensure your interface method signature includes `error` as a return value to avoid generation errors.
+</Accordion>
+<Accordion title="Incorrect Template Syntax">
+Malformed template DSL in comments, such as unbalanced `{{if}}` or misuse of placeholders, will break generation. Validate templates carefully and test incrementally.
+</Accordion>
+<Accordion title="Missing Context Parameter">
+If your method signature does not include a `context.Context`, GORM CLI will automatically add it. Avoid manually adding duplicate context parameters.
+</Accordion>
+<Accordion title="Unrecognized Placeholders or Variables">
+Only parameters declared in method signatures can be used as placeholders. Using undeclared or mistyped parameters causes generation failure.
+</Accordion>
+<Accordion title="Skipped Generation of Interfaces">
+Make sure your interfaces and structs are included via configuration if you use inclusion/exclusion filters. Otherwise, no code may be emitted.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Summary
+
+Query Interfaces & SQL Templates define the idiomatic way to write expressive, type-safe, and reusable queries in GORM CLI by embedding SQL DSL in method documentation. Through parameter binding, conditional blocks, and model-aware template variables, you craft flexible data access methods that integrate fluidly in Go projects.
+
+Mastering this page equips you to leverage the full power of GORM CLI's generated APIs for high-safety, maintainable Go database layers.
+
+---
+
+## See Also
+
+- [Writing Type-Safe Queries from Interfaces](/guides/core-workflows/writing-type-safe-queries): Practical guide to crafting query interfaces.
+- [Template DSL for Dynamic Queries](/guides/advanced-usage-patterns/template-dsl): In-depth on DSL directives.
+- [Using Field Helpers for Filters & Updates](/guides/core-workflows/using-field-helpers): How generated field helpers complement query interfaces.
+- [Associations: Types and Operations](/concepts/association-and-query-models/association-architecture): Managing relational data with generated helpers.
+- [Configuration & Customization](/concepts/scalability-integration/configuration-and-customization): Customizing generation and filtering of interfaces.
+
+---
+
+## Additional Resources
+
+- GORM CLI GitHub Repository: [https://github.com/go-gorm/cli](https://github.com/go-gorm/cli)
+- Official Examples: `/examples/query.go` and `/examples/models/user.go` illustrate interface and model definitions
+
+---
