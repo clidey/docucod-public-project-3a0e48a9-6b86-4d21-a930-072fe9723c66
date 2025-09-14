@@ -1,0 +1,271 @@
+---
+title: "Working With Basic Fields"
+description: "Tutorial on making the most of field helpers for basic types. Explains predicate/setter patterns, batch operations, and practical filtering and updating examples, with recommendations for idiomatic usage."
+---
+
+# Working With Basic Fields
+
+This guide shows you how to effectively use the generated field helpers for basic types in GORM CLI. You'll learn to leverage predicate and setter patterns, perform batch operations, and apply practical filtering and updates. We also cover best practices to write idiomatic, readable, and maintainable data access code with the generated helpers.
+
+---
+
+## 1. Task Overview
+
+### What This Guide Helps You Accomplish
+- Understand how to use model-driven field helpers for basic fields (ints, strings, bools, times, and nullable types).
+- Learn the common predicate (filter) and setter (update/create) methods available.
+- Perform batch updates and creates using generated Set assignments.
+- Master combined filtering with multiple conditions.
+- Handle zero values, NULLs, and SQL expression setters elegantly.
+- See practical examples of common filtering, counting, updating, and deleting operations.
+
+### Prerequisites
+- You must have generated code from GORM CLI including model field helpers.
+- Familiarity with basic GORM usage in Go (connecting to DB, using `gorm.DB` instances).
+- Basic understanding of Go generics and context usage.
+
+### Expected Outcome
+By the end, you will be able to write safe, type-checked queries and updates using the generated basic field helpers to filter, count, update, create, and delete data in a fluent and idiomatic manner.
+
+### Time Estimate
+About 15 minutes for reading and running example code.
+
+### Difficulty Level
+Beginner to Intermediate (no advanced SQL or internal API knowledge required).
+
+---
+
+## 2. Understanding Basic Field Helpers
+
+Generated basic field helpers provide strongly typed predicates and setters for the fields in your models. These helpers simplify building SQL WHERE clauses and SET assignments while being safe and discoverable.
+
+For example, a basic `User` model generates helpers like:
+
+- `User.ID` as `field.Number[uint]`
+- `User.Name` as `field.String`
+- `User.Age` as `field.Number[int]`
+- Nullable fields like `User.Score` as `field.Field[sql.NullInt64]`
+- Boolean as `field.Bool`
+- Time fields as `field.Time`
+
+Each of these exposes a set of predicate methods (e.g., `Eq()`, `Gt()`, `IsNull()`) and setters (e.g., `Set()`, `SetExpr()`, `Incr()`).
+
+---
+
+## 3. Predicate Methods: Filtering Data
+
+Field helpers implement intuitive predicates you can use in `Where` clauses for filtering:
+
+- **Equality & Inequality**: `.Eq(value)`, `.Neq(value)`
+- **Comparison**: `.Gt(value)`, `.Gte(value)`, `.Lt(value)`, `.Lte(value)`
+- **Null Checks**: `.IsNull()`, `.IsNotNull()` (useful for nullable fields)
+- **Like & Contains (strings)**: `.Like(value)`, `.Contains(value)`
+- **Between (numeric/time)**: `.Between(lower, upper)`
+
+### Example: Filtering Users
+```go
+usersOver18Active, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+  Find(ctx)
+if err != nil {
+  // handle error
+}
+```
+
+This translates into `WHERE age > 18 AND role = 'active'`.
+
+---
+
+## 4. Setter Methods: Creating and Updating Data
+
+Field helpers also have setters to build `Set(...)` update or create statements easily:
+
+- `.Set(value)` — set a direct value (including zero values, nulls)
+- `.SetExpr(clause.Expr)` — set using arbitrary SQL expressions
+- `.Incr(n int)` — increment numeric fields
+- String-specific setters like `.Upper()` (returns an assigner for updating string case)
+
+### Example: Update with Setters
+```go
+rows, err := gorm.G[models.User](db).
+  Where(generated.User.Role.Eq("pending")).
+  Set(
+    generated.User.Role.Set("active"),
+    generated.User.Age.Incr(1),
+  ).
+  Update(ctx)
+if err != nil {
+  // handle error
+}
+```
+
+This updates all pending users by setting `role = 'active'` and incrementing `age` by 1.
+
+### Example: Creating with Set
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("new_user"),
+    generated.User.Age.Set(29),
+    generated.User.Role.Set("active"),
+  ).
+  Create(ctx)
+```
+
+This creates a new user with the specified values.
+
+---
+
+## 5. Batch Operations and Filtering
+
+You can filter by multiple objects using collection predicates and batch update many rows at once.
+
+### Filtering with Multiple Conditions
+```go
+users := []models.User{{Name: "bob", Age: 18}, {Name: "alice", Age: 25}}
+matches, err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Find(ctx)
+
+// Or with Filter:
+matchesBatch, err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice"), generated.User.Age.Gte(25)).
+  Find(ctx)
+```
+
+### Filtering Using Time Ranges
+```go
+start := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+end := time.Now()
+recentUsers, err := gorm.G[models.User](db).
+  Where(generated.User.CreatedAt.Gte(start), generated.User.CreatedAt.Lt(end)).
+  Find(ctx)
+```
+
+This filters users created within a time window.
+
+---
+
+## 6. Handling Zero Values and NULLs
+
+Generated setters support setting zero values explicitly and also support types like `sql.NullInt64` or `sql.NullTime`.
+
+- Use `.Set(sql.NullInt64{})` to explicitly set NULL.
+- Boolean zero values `false` and int zero `0` in `.Set()` are respected and persisted.
+
+### Zero Value Update Example
+```go
+_, err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice")).
+  Set(
+    generated.User.Age.Set(0),
+    generated.User.IsAdult.Set(false),
+    generated.User.Score.Set(sql.NullInt64{}),
+  ).
+  Update(ctx)
+```
+
+This zeroes out numeric and boolean fields, and nullifies score.
+
+---
+
+## 7. Example Scenarios
+
+### Example 1: Find Active Users Older Than 18
+```go
+users, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+  Find(ctx)
+```
+
+### Example 2: Update Role From Pending to Active
+```go
+_, err := gorm.G[models.User](db).
+  Where(generated.User.Role.Eq("pending")).
+  Set(generated.User.Role.Set("active")).
+  Update(ctx)
+```
+
+### Example 3: Increment Age By 3 for a User
+```go
+_, err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(generated.User.Age.Incr(3)).
+  Update(ctx)
+```
+
+### Example 4: Create User Using Set
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("set_user"),
+    generated.User.Age.Set(29),
+    generated.User.Role.Set("active"),
+  ).
+  Create(ctx)
+```
+
+---
+
+## 8. Best Practices
+
+- Always use generated field helpers for type safety and code clarity.
+- Use `.SetExpr()` for complex SQL expressions where needed.
+- Explicitly set zero values with `.Set()` when you intend to overwrite.
+- Use `.IsNull()` and `.IsNotNull()` predicates for nullable columns.
+- Combine multiple conditions in `.Where()` by comma separation for AND logic.
+- Batch updates should leverage `.Set()` setters with `.Where()` to restrict rows.
+
+---
+
+## 9. Common Pitfalls & Troubleshooting
+
+<AccordionGroup title="Common Issues and Solutions">
+<Accordion title="Update seems to not update zero or NULL values">
+Ensure you use `.Set()` setters for zero or NULL values explicitly; direct `.Update(ctx, field, value)` may ignore zero values depending on GORM configuration.
+</Accordion>
+<Accordion title="Filter with .Eq() does not match expected rows">
+Verify the correct column name and types from the generated helper; also confirm database contents and check NULL-related conditions.
+</Accordion>
+<Accordion title="Using Null Types like sql.NullInt64 in predicates">
+Use generated helper predicates like `.IsNull()` and `.IsNotNull()` rather than `.Eq(sql.NullInt64{})` for NULL checks.
+</Accordion>
+<Accordion title="Unexpected SQL generated from JSON fields">
+Custom field helpers like JSON need database JSON support (MySQL JSON1, SQLite JSON1). Verify that the database supports the JSON functions before use.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 10. Next Steps & Related Content
+
+- Explore the [Working With Associations](https://gorm.io/cli/gorm/guides/best-practices-patterns/associations-and-relations) guide for handling relations and associations.
+- Use [Template-Based Queries](https://gorm.io/cli/gorm/guides/best-practices-patterns/template-based-queries) for advanced query customization.
+- Review [Your First Code Generation](https://gorm.io/cli/gorm/getting-started/configuration-first-usage/first-generation-run) to refresh the generation workflow.
+- Learn how to [Customize Generation Configuration](https://gorm.io/cli/gorm/guides/core-workflows/customizing-generation-config) for tailored field helper mappings.
+
+---
+
+## Appendix: Predicate and Setter Quick Reference
+
+| Predicate            | Description                         | Example                          |
+|----------------------|-----------------------------------|---------------------------------|
+| `.Eq(value)`         | Equals value                      | `User.ID.Eq(1)`                  |
+| `.Neq(value)`        | Not equals                       | `User.Role.Neq("admin")`       |
+| `.Gt(value)`         | Greater than                    | `User.Age.Gt(18)`                |
+| `.Gte(value)`        | Greater or equal                | `User.Age.Gte(18)`               |
+| `.Lt(value)`         | Less than                      | `User.Age.Lt(65)`                |
+| `.Lte(value)`        | Less or equal                  | `User.Age.Lte(65)`               |
+| `.Between(low, high)`| Within range                   | `User.Age.Between(18, 65)`      |
+| `.Like(pattern)`     | SQL LIKE pattern               | `User.Name.Like("%jinzhu%")`  |
+| `.IsNull()`          | IS NULL check                 | `User.Score.IsNull()`            |
+| `.IsNotNull()`       | IS NOT NULL check             | `User.Score.IsNotNull()`         |
+
+| Setter               | Description                     | Example                          |
+|----------------------|---------------------------------|---------------------------------|
+| `.Set(value)`        | Set literal value               | `User.Name.Set("alice")`       |
+| `.SetExpr(expr)`     | Set SQL expression              | `User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{1}})` |
+| `.Incr(delta)`       | Increment integer field by delta| `User.Age.Incr(3)`               |
+| `.Upper()`           | Uppercase string (assigner)    | `User.Name.Upper()`              |
+
+---
