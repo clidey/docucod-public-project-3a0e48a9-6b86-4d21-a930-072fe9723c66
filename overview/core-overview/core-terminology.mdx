@@ -1,0 +1,279 @@
+---
+title: "Core Concepts & Terminology"
+description: "Essential terms and concepts you’ll encounter: query interfaces, SQL templates, model field helpers, associations, type-safety, and configuration mapping. Provides intuitive definitions and how they relate to generated code."
+---
+
+# Core Concepts & Terminology
+
+Understand the essential building blocks and key terms you will encounter when using **GORM CLI**. This page equips you with intuitive definitions and explains how these concepts relate to the code you generate and use. Grasping them will ensure you maximize GORM CLI’s powerful, type-safe generation capabilities.
+
+---
+
+## What You’ll Learn Here
+
+- Meaning of core terms like query interfaces, SQL templates, field helpers, associations, type-safety, and configuration mapping
+- How these terms connect to your generated code
+- Practical examples illustrating the concepts in action
+
+---
+
+## Query Interfaces
+
+At the heart of GORM CLI’s power lies **query interfaces**—Go interfaces that declare database operations with embedded SQL templates in their method comments. 
+
+**What are they?**
+
+They are user-defined interfaces, parameterized by generic types (`T any`), expressing the queries or updates you want to run on your database models.
+
+**Why use them?**
+
+- Serve as a single source of truth for your data operations
+- GORM CLI generates concrete, type-safe implementations based on these interfaces
+- Enable a fluent, discoverable API for data access and manipulation
+
+**Example:**
+```go
+// Query interface that defines methods with SQL templates
+// The method comments contain SQL queries or update logic
+// The generator creates type-safe implementations for you
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+}
+```
+
+This example shows a `Query` interface with methods that translate into SQL statements using placeholders. `@@table` resolves to the model’s table name, and `@id` or `@name` binds to method parameters.
+
+---
+
+## SQL Templates & Template DSL
+
+**SQL Templates** are embedded SQL or SQL fragments placed inside query interface method comments. GORM CLI parses and processes them into executable, parameterized SQL calls.
+
+**Core directives of the Template DSL:**
+
+| Directive   | Purpose                             | Example                                      |
+|-------------|-----------------------------------|----------------------------------------------|
+| `@@table`   | Resolves to the model's table name | `SELECT * FROM @@table WHERE id=@id`         |
+| `@@column`  | Dynamic column name binding         | `WHERE @@column=@value`                       |
+| `@param`    | Bind Go parameter to SQL param      | `WHERE name=@user.Name`                       |
+| `{{where}}` | Conditional WHERE clause            | `{{where}} age > 18 {{end}}`                  |
+| `{{set}}`   | Conditional SET clause (UPDATE)     | `{{set}} name=@name, age=@age {{end}}`       |
+| `{{if}}`    | Conditional SQL fragment            | `{{if age > 0}} AND age=@age {{end}}`        |
+| `{{for}}`   | Iteration over a collection         | `{{for _, tag := range tags}} ... {{end}}`   |
+
+---
+
+## Model Field Helpers
+
+Generated from your Go `struct` model definitions, **field helpers** provide strongly typed, idiomatic usage for filtering, updating, and ordering operations.
+
+**What do they do?**
+
+- Map struct fields to SQL columns with compile-time type safety
+- Enable expressive, readable queries and updates
+- Support predicates, setters, and expressions
+
+**Key point:** Model fields that are basic types (string, int, time, etc.) will have corresponding helpers such as `.Eq()`, `.Like()`, `.Between()`, `.Set()`, and `.Incr()`.
+
+**Example:**
+```go
+// For a User model
+generated.User.ID.Eq(1)                 // id = 1
+generated.User.Name.Like("%jinzhu%")   // name LIKE '%jinzhu%'
+generated.User.Age.Between(18, 65)       // age BETWEEN 18 AND 65
+```
+
+These methods enable you to build type-safe conditions that integrate seamlessly with GORM queries.
+
+---
+
+## Associations
+
+Your models often reference other models through relationships. GORM CLI generates **association helpers** to handle these relations with type safety and intuitive methods.
+
+**Supported association types:**
+
+- **belongs to**
+- **has one**
+- **has many**
+- **many to many (m2m)**
+- Polymorphic associations
+
+**What can you do with these helpers?**
+
+- Create and link associated records (single and batch)
+- Update associated records conditionally
+- Unlink associations (remove the link without deleting)
+- Delete associated records or join rows
+
+**Examples:**
+```go
+// Create a User and an associated Pet
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Update a User's pet where pet name is 'fido'
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido"))
+    .Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+// Unlink all Pets from a User
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+Through these methods, maintain relational integrity and efficiently manipulate parent-child or many-to-many links with ease.
+
+---
+
+## Type-Safety
+
+GORM CLI enforces **compile-time safety** throughout your data access layers.
+
+**How does this help you?**
+
+- Catches type mismatches and query errors early
+- Avoids dangerous string concatenation of SQL
+- Guarantees method signatures that match query parameters and results
+
+For example, the generated query methods have strictly typed parameters, and the results are strongly typed structs or slices, preventing runtime surprises.
+
+---
+
+## Configuration Mapping
+
+While you can use GORM CLI with zero config, powerful customization is available via **`genconfig.Config`**.
+
+**Key configuration capabilities:**
+
+- Customize output file paths
+- Map custom Go types or struct tags to specific field helpers
+- Whitelist or blacklist interfaces and structs by name or pattern
+- Apply configuration globally or per file
+
+**Example:**
+```go
+var _ = genconfig.Config{
+  OutPath: "examples/output",
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},  // map sql.NullTime to Time helper
+  },
+  FieldNameMap: map[string]any{
+    "json": JSON{},              // map fields tagged `gen:"json"` to custom JSON helper
+  },
+  IncludeInterfaces: []any{"Query*"},   // only generate interfaces matching pattern
+}
+```
+
+This flexibility lets you tailor generation to your project's needs without changing source interfaces or structs.
+
+---
+
+## How These Concepts Work Together
+
+1. You **define models** as Go structs with fields and associations.
+2. You **write query interfaces** with methods annotated by SQL templates expressing your queries.
+3. You optionally **configure** generation behavior with `genconfig.Config`.
+4. GORM CLI generates:
+   - Type-safe query API implementations based on interfaces and SQL templates
+   - Field helpers based on your models, including association helpers
+5. In your application, you compose queries and updates using these fluent, type-safe APIs, guaranteeing correctness and discoverability.
+
+---
+
+## Practical Example Workflow
+
+```go
+// 1. Define model
+package models
+
+type User struct {
+  ID   uint
+  Name string
+  Age  int
+  Pets []*Pet
+}
+
+type Pet struct {
+  ID     uint
+  UserID uint
+  Name   string
+}
+
+// 2. Define Query interface with SQL template comments
+package queries
+
+type UserQuery[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // where("name=@name AND age>@age")
+  FilterByNameAndAge(name string, age int)
+}
+
+// 3. Generate code
+//   gorm gen -i ./queries -o ./generated
+
+// 4. Use generated code in app
+u, err := generated.UserQuery[models.User](db).GetByID(ctx, 123)
+users, err := generated.UserQuery[models.User](db).FilterByNameAndAge("alice", 20).Find(ctx)
+
+// 5. Use Field Helpers for expressive conditions
+users, err = gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice"), generated.User.Age.Gt(18)).
+  Find(ctx)
+```
+
+This tight feedback loop from your source code to generated code accelerates development with type safety and readability.
+
+---
+
+## Tips & Best Practices
+
+- Define clear and concise query interfaces reflecting your application's needs.
+- Use SQL template DSL conditionals (`{{if}}`, `{{where}}`) to build dynamic queries safely.
+- Leverage association helpers to manage related data without manual joins or complex queries.
+- Configure field mappings to ensure custom types get correct helper treatment.
+- Keep interfaces and models organized for maintainability and selective generation.
+
+---
+
+## Troubleshooting Common Challenges
+
+<Tip>
+If your generated code lacks expected methods or helpers, verify your interfaces and structs are included by your generation config filters (`IncludeInterfaces`, `ExcludeStructs`, etc.).
+</Tip>
+
+<Tip>
+When templates don't generate correct SQL, check your placeholders (@param, @@table) and conditionals (`{{where}}` blocks) syntax carefully.
+</Tip>
+
+<Tip>
+If you see type errors in generated code, ensure your Go models use consistent and supported types, or map custom types in your `FieldTypeMap`.
+</Tip>
+
+---
+
+## Further Reading & Related Documentation
+
+- [What is GORM CLI?](/overview/intro-value/what-is-gorm-cli) — Get the full introduction to the product and its goals.
+- [Key Benefits & Value Proposition](/overview/intro-value/benefits-value) — Learn why GORM CLI matters.
+- [System Architecture Overview](/overview/core-overview/architecture-system-overview) — Understand the internal workings and flow.
+- [Generation Configuration](/concepts/configuration-and-customization/generation-configuration) — Customize your generation setup.
+- Getting Started guides to install and use the CLI.
+
+---

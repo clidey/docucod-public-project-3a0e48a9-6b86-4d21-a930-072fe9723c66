@@ -1,0 +1,277 @@
+---
+title: "Generate Type-Safe Query APIs"
+description: "Step-by-step instructions for writing query interfaces with SQL templates, triggering code generation, and using the resulting type-safe query methods in your application code. Illustrates the end-to-end workflow for read and write operations."
+---
+
+# Generate Type-Safe Query APIs
+
+Step-by-step instructions for writing query interfaces with SQL templates, triggering code generation, and using the resulting type-safe query methods in your application code. This guide illustrates the end-to-end workflow for both read and write operations.
+
+---
+
+## 1. Overview: What You Will Accomplish
+
+This guide helps you generate type-safe query APIs using GORM CLI by:
+
+- Writing Go interfaces with embedded SQL templates in method comments
+- Running the generator to produce concrete implementation code
+- Utilizing the generated APIs for querying and updating your database with compile-time safety
+
+### Prerequisites
+
+- A Go 1.18+ project with your data models defined as Go structs
+- SQL template query interfaces written as Go interfaces
+- GORM CLI installed (`go install gorm.io/cli/gorm@latest`)
+- Basic familiarity with GORM and Go generics
+
+### Expected Outcome
+
+You will have:
+
+- Generated Go files implementing your query interfaces with type safety
+- Fluent, discoverable query and update methods supporting raw SQL templates
+- Improved developer productivity and fewer runtime errors with strong typing
+
+### Estimated Time
+
+~15-30 minutes for a first run, depending on interface complexity
+
+### Difficulty Level
+
+Intermediate—requires understanding of Go interfaces, method comments, and basic GORM usage
+
+---
+
+## 2. Step-by-Step Instructions for Generating Type-Safe APIs
+
+### Step 1: Write Query Interfaces with SQL Templates
+
+Create Go interfaces that define query methods. Embed raw SQL and templating syntax inside method comments.
+
+Example:
+
+```go
+// examples/query.go
+package examples
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  // {{if user.Name != ""}} name=@user.Name, {{end}}
+  // {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateInfo(user User, id int) error
+}
+```
+
+**Key points:**
+
+- Use `@@table` to represent the model's table name.
+- Use placeholders starting with `@` to bind method parameters.
+- Use Go templating directives (`{{if}}`, `{{for}}`, `{{where}}`, `{{set}}`) for conditional and dynamic SQL generation.
+- Methods return either `(T, error)` for queries or `error` for update operations.
+
+### Step 2: Define Your Data Models
+
+Models should be Go structs that represent your database tables.
+
+Example:
+
+```go
+package examples
+
+type User struct {
+  ID   int
+  Name string
+  Age  int
+}
+```
+
+### Step 3: Run the GORM CLI Generation Command
+
+Use the `gorm gen` command to generate the implementation from your interfaces.
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+- `-i` specifies the input directory or file containing interfaces
+- `-o` specifies the output directory for generated code files
+
+The CLI scans for interfaces with SQL templates, processes configs, and writes generated type-safe code for your queries and updates.
+
+### Step 4: Import and Use the Generated APIs
+
+In your application, import the generated package and call the generated methods with context and parameters.
+
+Example usage:
+
+```go
+import (
+  "context"
+  "generated"
+  "gorm.io/gorm"
+  "examples"
+)
+
+func main() {
+  ctx := context.Background()
+  db := /* initialize gorm.DB */
+
+  // Retrieve a user by ID
+  user, err := generated.Query[examples.User](db).GetByID(ctx, 123)
+  if err != nil {
+    panic(err)
+  }
+  fmt.Println(user.Name)
+
+  // Update user info
+  err = generated.Query[examples.User](db).UpdateInfo(ctx, examples.User{Name: "Alice", Age: 30}, 123)
+  if err != nil {
+    panic(err)
+  }
+}
+```
+
+**Remember:** Methods automatically receive `ctx context.Context` if omitted in interface signatures.
+
+### Step 5: Verify Generated Code and Refine
+
+- Locate output files in the specified output directory.
+- Examine generated implementations; they include method bodies binding SQL templates to GORM calls.
+- If needed, adjust interfaces or generation configs and regenerate.
+
+---
+
+## 3. Real-World Examples
+
+### Example Interface with Various Queries and Updates
+
+```go
+// Query applies filtering with templating
+//
+// SELECT * FROM @@table
+// {{where}}
+//   {{if .Name != ""}} name=@name {{end}}
+//   {{if .Age > 0}} AND age=@age {{end}}
+// {{end}}
+FilterUser(name string, age int) ([]T, error)
+
+// Update sets fields conditionally
+//
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+
+### Generated Usage
+
+```go
+users, err := generated.Query[User](db).FilterUser(ctx, "John", 25)
+if err != nil {
+  panic(err)
+}
+
+err = generated.Query[User](db).UpdateUser(ctx, User{Name: "Jane"}, 25)
+```
+
+---
+
+## 4. Troubleshooting & Best Practices
+
+### Common Issues
+
+- **Missing SQL Templates:** Ensure each interface method has a correctly formatted SQL comment block.
+- **Return Types:** Query methods must return either `(T, error)` or `([]T, error)`. Update methods return `error` only.
+- **Context Parameter:** The generator adds `ctx context.Context` automatically if omitted but define it explicitly if you want to control parameter order.
+- **Path & Permissions:** Ensure `-i` input path points to correct Go files and `-o` output directory is writable.
+- **Unsupported SQL Syntax:** Stick to the provided DSL directives and template syntax for compatibility.
+
+### Best Practices
+
+- Use detailed SQL comments with templating for dynamic query generation.
+- Leverage `@@table` and `@@column` placeholders to avoid hardcoding table/column names.
+- Use generation configs (`genconfig.Config`) to customize output directories and field mappings.
+- Separate query interfaces by functionality or module to keep generated code modular.
+- Review generated code after each run to confirm expectations.
+
+---
+
+## 5. Next Steps & Related Resources
+
+- Explore [Writing and Using SQL Template-Based Queries](../real-world-usage-patterns/template-based-queries) for advanced template DSL usage.
+- Learn field helper generation for model-driven predicates in [Building Model-Driven Field Helpers](../getting-started/model-driven-field-helpers).
+- Deep dive into config customization [Customizing Generation with genconfig.Config](../advanced-customization/generation-config).
+- Troubleshoot common issues in [Common Setup and Generation Issues](../../getting-started/troubleshooting-help/common-issues).
+
+---
+
+## Additional Notes
+
+The generated code aligns strictly with your interface definitions and SQL comments. GORM CLI focuses on improving developer ergonomics by converting raw SQL embedded in Go interfaces into fluent, type-safe API calls. Keep your interfaces clean and focused on expressiveness to unlock the best of the generator.
+
+---
+
+## Reference: Template DSL Example
+
+| Directive   | Description                         | Example                               |
+|-------------|-----------------------------------|-------------------------------------|
+| `@@table`   | Table name placeholder             | `SELECT * FROM @@table WHERE id=@id`|
+| `@@column`  | Dynamic column placeholder          | `WHERE @@column=@value`              |
+| `@param`    | Go parameter binding               | `WHERE name=@user.Name`              |
+| `{{where}}` | Conditional WHERE clause            | `{{where}} age > 18 {{end}}`        |
+| `{{set}}`   | Conditional SET clause (UPDATE)    | `{{set}} name=@name {{end}}`        |
+| `{{if}}`    | Conditional SQL fragment            | `{{if age > 0}} AND age=@age {{end}}`|
+| `{{for}}`   | Loop over collection                 | `{{for _, tag := range tags}}...{{end}}`|
+
+
+## Reference: CLI Command Summary
+
+```bash
+gorm gen -i ./path/to/your/interfaces -o ./path/for/generated/code
+```
+
+- `-i, --input` (required): path to Go interface file or directory
+- `-o, --output`: output directory for generated code (default `./g`)
+
+---
+
+<CardGroup cols={2}>
+<Card title="Source Code for Generator Command">
+<Source url="https://github.com/go-gorm/cli" paths={[{"path":"internal/gen/gen.go","range":"1-67"}]} />
+</Card>
+<Card title="Example Query Interface">
+<Source url="https://github.com/go-gorm/cli" paths={[{"path":"examples/query.go","range":"10-38"}]} />
+</Card>
+</CardGroup>
+
+---
+
+<Tip>
+For best results, keep your SQL template comments clear and minimal. Use Go templating to maintain flexibility and avoid duplication.
+</Tip>
+
+<Note>
+The generator automatically injects `context.Context` into method signatures if not defined explicitly, ensuring integration with Go context patterns.
+</Note>
+
+<Warning>
+Be cautious with complex SQL templating logic inside comments as errors there can cause generation failure.
+</Warning>
+
+---
+
+This guide equips you to leverage GORM CLI's powerful SQL template-driven code generation to build clean, type-safe database access layers efficiently.
+
+
