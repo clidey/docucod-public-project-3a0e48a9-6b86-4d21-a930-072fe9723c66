@@ -1,0 +1,236 @@
+---
+title: "Writing Interfaces & Models"
+description: "Showcase, with annotated samples, how to write a query interface (with SQL templates in comments) and corresponding GORM-compatible model structs. Emphasize the importance of co-location for model and interface files."
+---
+
+# Writing Interfaces & Models
+
+This guide demonstrates how to write query interfaces with embedded SQL templates and corresponding GORM-compatible model structs. It emphasizes the best practice of keeping model definitions and query interfaces co-located within the same package or directory to enable seamless code generation and clearer project structure.
+
+---
+
+## 1. Why Write Interfaces & Models Together?
+
+GORM CLI relies on two complementary code generation inputs:
+
+- **Query Interfaces:** Define repository-style methods with SQL templates embedded in comments.
+- **Model Structs:** Define database schema fields using Go structs compatible with GORM conventions.
+
+Co-locating these ensures that the generator can correctly map queries to models, produce type-safe APIs, and generate field helpers that align perfectly with your models.
+
+<Check>
+Keep your query interfaces and models in the same package or directory. This practice simplifies configuration and maximizes code generation accuracy.
+</Check>
+
+---
+
+## 2. Writing Your Query Interface
+
+Your query interface defines your data access methods. Each method includes SQL templates written inside method comments. These templates support placeholders and control flow with GORM CLI's SQL template DSL for dynamic and type-safe query generation.
+
+### Key Concepts
+
+- Use `@@table` to refer to the model's table name.
+- Use `@param` syntax to bind Go method parameters safely.
+- Use template directives (`{{if}}`, `{{where}}`, `{{set}}`, `{{for}}`) to write conditional SQL fragments.
+
+### Example Query Interface
+
+```go
+package examples
+
+import (
+	"time"
+
+	"gorm.io/cli/gorm/examples/models"
+)
+
+// Query defines the interface with SQL templates for data retrieval and update
+// across the User model.
+type Query[T any] interface {
+	// GetByID returns a single record matching the id.
+	//
+	// SELECT * FROM @@table WHERE id=@id AND name = "\@name"
+	GetByID(id int) (T, error)
+
+	// FilterWithColumn uses a dynamic @@column bound to a value.
+	// SELECT * FROM @@table WHERE @@column=@value
+	FilterWithColumn(column string, value string) (T, error)
+
+	// QueryWith conditionally builds WHERE clause based on user fields.
+	//
+	// SELECT * FROM users
+	//   {{if user.ID > 0}}
+	//       WHERE id=@user.ID
+	//   {{else if user.Name != ""}}
+	//       WHERE name=@user.Name
+	//   {{end}}
+	QueryWith(user models.User) (T, error)
+
+	// UpdateInfo dynamically sets update fields.
+	// UPDATE @@table
+	//  {{set}}
+	//    {{if user.Name != ""}} name=@user.Name, {{end}}
+	//    {{if user.Age > 0}} age=@user.Age, {{end}}
+	//    {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+	//  {{end}}
+	// WHERE id=@id
+	UpdateInfo(user models.User, id int) error
+
+	// Filter applies complex filtering with iteration and conditions.
+	// SELECT * FROM @@table
+	// {{where}}
+	//   {{for _, user := range users}}
+	//     {{if user.Name != "" && user.Age > 0}}
+	//       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+	//     {{end}}
+	//   {{end}}
+	// {{end}}
+	Filter(users []models.User) ([]T, error)
+
+	// FilterByNameAndAge uses a simplified filter template.
+	// where("name=@name AND age=@age")
+	FilterByNameAndAge(name string, age int)
+
+	// FilterWithTime filters records created within a time window.
+	// SELECT * FROM @@table
+	//  {{where}}
+	//    {{if !start.IsZero()}}
+	//      created_at > @start
+	//    {{end}}
+	//    {{if !end.IsZero()}}
+	//      AND created_at < @end
+	//    {{end}}
+	//  {{end}}
+	FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+### Notes
+
+- Methods that return a single record should have signatures like `GetByID(id int) (T, error)`.
+- The tooling automatically adds `context.Context` if missing from method signatures.
+- Embedded directives allow flexible dynamic SQL generation while maintaining type safety.
+
+<Info>
+Use `//` comments directly above methods for embedding the SQL templates.
+Avoid placing SQL inside string literals.
+</Info>
+
+---
+
+## 3. Defining Your GORM-Compatible Model Structs
+
+Models define your database schema using standard Go structs that GORM recognizes. GORM CLI reads these to generate field helpers that strongly type filter, update, and association fields.
+
+### Example Model
+
+```go
+package models
+
+import (
+	"gorm.io/gorm"
+	"time"
+)
+
+type User struct {
+	gorm.Model
+	Name      string
+	Age       int
+	Email     string
+	Role      string
+	CreatedAt time.Time
+}
+```
+
+#### Key Points
+
+- Embed `gorm.Model` or define your own primary key and timestamp fields.
+- Keep fields exported (`capitalized`) for GORM and the generator to recognize.
+- Use struct tags and custom gen-specific tags for advanced mapping (see configuration guides).
+
+<Tip>
+Maintain synchronization between your model fields and query interfaces to avoid runtime mismatches.
+</Tip>
+
+---
+
+## 4. Best Practices for Co-Locating Models and Interfaces
+
+- Place your models and query interfaces in the **same package or directory**.
+- This co-location allows the generator to automatically associate the interface with the model types.
+- Enables simplified command-line invocation, e.g., `gorm gen -i ./examples -o ./generated` where `./examples` contains both models and queries.
+
+<Check>
+Avoid splitting model structs and query interfaces into widely separate directories; it complicates generation and maintenance.
+</Check>
+
+---
+
+## 5. Example File Layout
+
+```plaintext
+/examples
+  ├── models
+  │    └── user.go      # User model struct
+  └── query.go          # Query interface with SQL templates
+```
+
+Both files belong to the same package, e.g., `package examples`.
+
+---
+
+## 6. Summary of Workflow
+
+<Steps>
+<Step title="Write your GORM model structs">
+Define clean, idiomatic Go structs that reflect your database tables.
+</Step>
+<Step title="Create a query interface with SQL templates">
+Write interface methods with commented SQL templates to express queries and updates.
+</Step>
+<Step title="Keep models and interfaces together">
+Place both in the same package/directory for seamless code generation.
+</Step>
+<Step title="Run GORM CLI to generate code">
+Invoke the CLI pointing to the package path containing your code.
+</Step>
+<Step title="Use the generated type-safe APIs">
+Consume the generated functions which leverage your models and queries safely.
+</Step>
+</Steps>
+
+---
+
+## 7. Troubleshooting and Tips
+
+<AccordionGroup title="Common Questions & Issues">
+<Accordion title="Why is my query interface not generating any code?">
+Check that your interface and model structs are in the same package/directory.
+Ensure your method comments contain proper SQL templates.
+Verify config settings for inclusion/exclusion filters are not omitting interfaces or structs.
+</Accordion>
+<Accordion title="What if I get type mismatches after generation?">
+Ensure method signatures in your interface exactly match model types.
+Update model fields and regenerate the code to keep in sync.
+Avoid manual edits to generated files.
+</Accordion>
+<Accordion title="How to handle dynamic columns or tables in SQL templates?">
+Use `@@column` for dynamic columns and `@@table` for model table references.
+Bind query parameters using `@param` syntax to ensure SQL safety.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 8. Related Documentation
+
+- [Generating Code](./generating-code) - Learn how to run the generation command after writing interfaces and models.
+- [Customizing Code Generation](./customizing-generation) - Configure field mappings and generation options.
+- [Using Generated APIs](./first-usage) - Practical usage of the generated type-safe APIs.
+
+---
+
+For a conceptual view of how interfaces and models feed into the generation workflow, see the [Architecture Overview](/overview/core-concepts-architecture/architecture-overview).
+
+---
