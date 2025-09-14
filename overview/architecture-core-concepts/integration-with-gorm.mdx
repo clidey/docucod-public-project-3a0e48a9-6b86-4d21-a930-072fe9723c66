@@ -1,0 +1,218 @@
+---
+title: "Integration with GORM Ecosystem"
+description: "Illustrate how GORM CLI seamlessly extends the GORM ORM, embedding generated APIs into your workflow. Highlight compatibility requirements (Go 1.18+), how generated code cooperates with existing database code, and where you can customize integration."
+---
+
+# Integration with GORM Ecosystem
+
+GORM CLI is designed not just as a standalone code generator but as a seamless extension to the core GORM ORM. This page guides you through how the generated code fits naturally into your existing GORM workflows, the environment requirements to ensure compatibility, and where you can customize integration for maximum control.
+
+---
+
+## Why Integration Matters
+
+Imagine you've spent time crafting your GORM models and writing raw SQL queries. GORM CLI automates the tedious parts — generating type-safe, fluent query APIs and powerful field helpers — but this automation must blend smoothly with GORM’s runtime behavior. Integration ensures you can generate code without disrupting your existing database logic or tooling.
+
+Successful integration lets you:
+
+- Use generated query interfaces just like native GORM queries
+- Leverage field helpers for filters, updates, and associations with type safety
+- Maintain a consistent development workflow without jumping between tools
+
+---
+
+## Compatibility Requirements
+
+**GORM CLI requires Go 1.18 or newer due to its reliance on generics.** This version unlocks the ability to generate generic, type-safe APIs that provide compile-time validation and fluent chaining.
+
+In addition:
+
+- Your project must use the [gorm.io/gorm](https://gorm.io/) ORM package.
+- Generated code depends on internal packages like `gorm.io/cli/gorm/field` for field helpers.
+- Generated APIs use GORM’s core `*gorm.DB` type, ensuring native compatibility.
+
+This alignment guarantees the generated code compiles and operates within the existing GORM ecosystem without additional adapters.
+
+<Tip>
+If your project uses an older Go version or a GORM fork with incompatible APIs, the generated code may not compile or work as intended.
+</Tip>
+
+---
+
+## How Generated Code Fits Your Workflow
+
+### Embedded Generated APIs
+
+When you run the generator, it converts your defined Go interfaces with SQL annotations and your model structs into `package-level` APIs. These APIs expose:
+
+- Type-safe query interface implementations, parameterized by models
+- Field helper structs and constants for each model's fields and associations
+
+This happens transparently:
+
+```go
+func Query[T any](db *gorm.DB, opts ...clause.Expression) QueryInterface[T] {
+    return QueryImpl[T]{ Interface: gorm.G[T](db, opts...), }
+}
+```
+
+Here, `gorm.G[T](db)` is an existing GORM helper that returns a generic GORM builder for type `T`, ensuring the generated code wraps around GORM’s native DB access.
+
+### Cooperating With Existing Database Code
+
+Because the generated query APIs and field helpers rely on GORM’s standard `*gorm.DB` and clause expressions, you can compose your existing database calls with generated pieces. For example:
+
+```go
+import (
+  "context"
+  "generated"
+  "gorm.io/gorm"
+)
+
+func GetActiveUser(ctx context.Context, db *gorm.DB, userID int) (*models.User, error) {
+  u, err := generated.Query[models.User](db).
+       Where(generated.User.ID.Eq(userID)).
+       Where(generated.User.Role.Eq("active")).
+       Take(ctx)
+  return &u, err
+}
+```
+
+You can replace your raw SQL or manual query building with generated APIs while continuing to use other GORM features such as transactions, preloading, and hooks.
+
+### Customized Field Behavior and Associations
+
+Generated code recognizes: 
+
+- Basic fields like integers, strings, booleans, timestamps
+- Associations including has one, has many, belongs to, many-to-many, and polymorphic relations
+
+We generate rich helpers that let you create, update, unlink, or delete related rows fluently, embedded into your data layer:
+
+```go
+// Create a user with pets
+err := gorm.G[models.User](db).
+    Set(
+      generated.User.Name.Set("Alice"),
+      generated.User.Pets.Create(generated.Pet.Name.Set("Fido")),
+    ).
+    Create(ctx)
+```
+
+This tight integration simplifies complex association operations without writing boilerplate code.
+
+---
+
+## Where You Can Customize Integration
+
+The generator defaults are sensible for most projects, but you have control over:
+
+### Output Location
+
+Customize where generated code lands via the CLI `-o` flag or `genconfig.Config.OutPath`.
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+```go
+var _ = genconfig.Config{
+  OutPath: "examples/generated",
+}
+```
+
+### Inclusion and Exclusion Filtering
+
+Control what interfaces and structs generate code using include/exclude lists, supporting glob patterns and type literals:
+
+```go
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"Query*"},
+  ExcludeInterfaces: []any{"*Deprecated*"},
+  IncludeStructs:    []any{"User", "Account*"},
+  ExcludeStructs:    []any{"*DTO"},
+}
+```
+
+### Field Type Mappings and Custom Helpers
+
+Override how fields map to generated helpers for additional flexibility. For example, map JSON fields to a custom JSON helper supporting different database-specific expressions:
+
+```go
+var _ = genconfig.Config{
+  FieldNameMap: map[string]any{
+    "json": JSON{},
+  },
+}
+```
+
+You can provide your implementations of custom field helpers and plug them into generated code seamlessly.
+
+---
+
+## Troubleshooting Common Integration Issues
+
+<AccordionGroup title="Troubleshooting Integration Problems">
+<Accordion title="Compilation Errors in Generated Code">
+Check your Go version is 1.18+ and GORM version matches `gorm.io/gorm`. Incompatible versions cause generic type errors.
+
+Ensure your models and interfaces are complete and properly annotated.
+</Accordion>
+<Accordion title="Generated Code Not Found in Project">
+Verify the output path. If using alternative output directories, import generated packages correctly.
+
+Ensure you run the generator after each change to keep code in sync.
+</Accordion>
+<Accordion title="Runtime Panics or Unexpected Behavior">
+Confirm your GORM database connection and configuration are valid.
+
+Test generated query methods in isolation.
+
+Check associations are correctly defined in your GORM models.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Diagram: Integration Workflow
+
+```mermaid
+flowchart TD
+
+  UserInput["Write Interfaces & Models"] --> Generator["Run GORM CLI Generator"]
+  Generator --> GeneratedCode["Generate Query APIs & Field Helpers"]
+  GeneratedCode --> ProjectSource["Integrate into Project Source"]
+
+  subgraph Runtime
+    ProjectSource -->|Uses| GORMDB["GORM ORM *gorm.DB"]
+    GORMDB --> Database[("Database")]
+  end
+
+  UserInput --> Database
+
+  %% Annotation
+  classDef note fill:#f9f,stroke:#333,stroke-width:1px,color:#000
+  class UserInput,Generator,GeneratedCode,ProjectSource,note
+```
+
+---
+
+## Next Steps
+
+1. Confirm your Go and GORM versions meet requirements.
+2. Write your model structs and query interfaces with SQL annotations.
+3. Run `gorm gen` with appropriate input and output paths.
+4. Import and use the generated code alongside GORM in your application.
+5. Optionally customize generation behavior using `genconfig.Config`.
+
+Explore related documentation:
+
+- [What is GORM CLI?](../product-intro/what-is-gorm-cli)
+- [Key Features at a Glance](../product-intro/core-features-overview)
+- [Getting Started: Generate Your First Query API](../../guides/core-workflows/getting-started)
+- [Model-Driven Field Helpers](../../guides/core-workflows/field-helper-basics)
+- [Customizing Code Generation with genconfig.Config](../../guides/advanced-patterns/customizing-generation)
+
+---
+
+By embedding generation tightly into GORM’s native APIs, GORM CLI empowers your backend development with compile-time safety, fluent queries, and reliable association management — all fitting naturally into your established workflows.
