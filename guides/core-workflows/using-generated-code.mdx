@@ -1,0 +1,221 @@
+---
+title: "Using the Generated APIs in Your Project"
+description: "Best practices for importing, integrating, and utilizing the generated code in everyday development. Demonstrates query, filtering, and update flows with idiomatic examples, ensuring users get maximum utility and safety."
+---
+
+# Using the Generated APIs in Your Project
+
+Harnessing the power of GORM CLI's code generation, this guide focuses on integrating and utilizing the generated type-safe query APIs and model-driven field helpers seamlessly in your Go project. You'll learn idiomatic usage patterns for querying, filtering, updating, and managing associations — all while maximizing compile-time safety and developer productivity.
+
+---
+
+## 1. Getting Started with Generated Code
+
+### 1.1 Importing the Generated Package
+
+After running the generator, import the generated package in your Go code as you would with any other package. For example, if your generated code was output to `generated`, import it accordingly:
+
+```go
+import "your/module/path/generated"
+```
+
+Make sure your project’s Go module path matches the import path.
+
+### 1.2 Establishing a GORM DB Connection
+
+Before using the generated APIs, initialize a GORM `*gorm.DB` instance connected to your database:
+
+```go
+import (
+    "gorm.io/driver/mysql" // or postgres, sqlite, etc.
+    "gorm.io/gorm"
+)
+
+func initDB() (*gorm.DB, error) {
+    dsn := "user:password@tcp(localhost:3306)/dbname?charset=utf8mb4&parseTime=True&loc=Local"
+    return gorm.Open(mysql.Open(dsn), &gorm.Config{})
+}
+```
+
+Once you have the `*gorm.DB` instance, you can invoke the generated query interfaces.
+
+---
+
+## 2. Querying Data Using Generated APIs
+
+The generated query APIs provide methods corresponding to your annotated interfaces with raw SQL templates. They allow you to perform type-safe queries with fluent Go method calls.
+
+### 2.1 Basic Record Retrieval
+
+Use generated query interfaces by calling their constructor function with the GORM DB instance, then invoke methods:
+
+```go
+// Example: Fetch a User by ID
+user, err := generated.Query[models.User](db).GetByID(ctx, 123)
+if err != nil {
+    // handle error
+}
+fmt.Println(user.Name)
+```
+
+This example triggers the generated SQL for fetching by ID, with compile-time safety ensuring your parameters and returns align.
+
+### 2.2 Conditional Queries and Filtering
+
+Many generated methods support conditional and dynamic SQL bindings. For example:
+
+```go
+// Filter users by name and age
+users, err := generated.Query[models.User](db).FilterByNameAndAge("jinzhu", 25).Find(ctx)
+if err != nil {
+    // handle error
+}
+for _, u := range users {
+    fmt.Println(u.Name, u.Age)
+}
+```
+
+Or use methods accepting structs to flexibly filter:
+
+```go
+filterUsers := []models.User{{Name: "alice", Age: 30}, {Name: "bob", Age: 25}}
+result, err := generated.Query[models.User](db).Filter(ctx, filterUsers)
+if err != nil {
+    // handle error
+}
+```
+
+This uses the generated code’s dynamic SQL templating with safe parameter binding.
+
+---
+
+## 3. Updating Records
+
+The generated APIs provide update methods reflecting the SQL templates you declared in your interfaces.
+
+### 3.1 Direct Update with Typed Structs
+
+Update record fields selectively as defined in the template:
+
+```go
+user := models.User{Name: "newname", Age: 22}
+err := generated.Query[models.User](db).UpdateInfo(ctx, user, 123)
+if err != nil {
+    // handle error
+}
+```
+
+The generated update method applies the dynamic `{{set}}` template logic, only including non-zero and relevant fields in the SQL.
+
+### 3.2 Fluent Update Using Field Helpers
+
+Alternatively, use the generated model-driven field helpers for granular control:
+
+```go
+import "gorm.io/cli/gorm/generated"
+
+err := gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(123)).
+    Set(
+        generated.User.Name.Set("updatedName"),
+        generated.User.Age.Incr(1),
+    ).
+    Update(ctx)
+```
+
+This leverages the fluent, type-safe `Set` and predicate helpers from generated code.
+
+---
+
+## 4. Best Practices for Using Generated APIs
+
+- **Always Pass Context:** The generated methods expect a `context.Context` parameter, ensuring proper request cancellation and deadlines.
+
+- **Use Generated Field Helpers:** For filtering and updating outside of interface-defined queries, use field helpers for safer, concise expressions.
+
+- **Avoid Raw SQL:** Benefit from the generated SQL templates instead of writing raw queries manually, to keep code maintainable and type safe.
+
+- **Expect Error Returns:** Handle errors from generated methods rigorously, as they return both execution errors and scan errors.
+
+- **Leverage Compilation Checks:** The code generator produces compile-time safe APIs, so heed compiler messages to catch signature mismatches early.
+
+- **Keep Models in Sync:** Regenerate code whenever you change your model structs or query interfaces to avoid inconsistencies.
+
+---
+
+## 5. Common User Flows
+
+### 5.1 Typical Query Flow
+
+```go
+// Initialize DB
+db, err := initDB()
+
+// Create query instance
+q := generated.Query[models.User](db)
+
+// Query by ID
+user, err := q.GetByID(ctx, 1)
+
+// Conditional filtering
+users, err := q.FilterByNameAndAge("jane", 28).Find(ctx)
+```
+
+### 5.2 Update Using Query API
+
+```go
+userToUpdate := models.User{Name: "jane", Age: 29}
+err := q.UpdateInfo(ctx, userToUpdate, 1)
+```
+
+### 5.3 Update Using Field Helpers
+
+```go
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Age.Set(30)).
+    Update(ctx)
+```
+
+---
+
+## 6. Troubleshooting & Tips
+
+<AccordionGroup title="Common Challenges and Solutions">
+<Accordion title="Error: method return types mismatch">
+Ensure your query interface methods return the correct combination of types and error as required by the generator. For example, methods with SQL templates must return either `(T, error)` or `error`. The generator enforces this strictly.
+</Accordion>
+<Accordion title="Generated code not reflecting latest models or interfaces">
+Always re-run the CLI generator after modifying your model structs or query interfaces. Stale generated code leads to runtime and compilation issues.
+</Accordion>
+<Accordion title="Context missing in method call">
+All generated methods accept `ctx context.Context` as the first parameter. Forgetting to pass it causes compilation errors.
+</Accordion>
+<Accordion title="Using field helpers for complex queries">
+Combine generated field helpers with GORM's chainable methods to construct complex queries fluently and safely:
+
+```go
+q := gorm.G[models.User](db)
+q.Where(generated.User.Name.Like("%smith%"))
+   .Where(generated.User.Age.Between(18, 40))
+   .Find(ctx)
+```
+</Accordion>
+</AccordionGroup>
+
+<Tip>
+To maximize the benefit of compile-time safety, write minimal raw SQL in interface comments and adopt the generated fluent APIs for all common operations.
+</Tip>
+
+---
+
+## 7. Next Steps & Related Documentation
+
+- **[Generating Query APIs & Field Helpers](/guides/core-workflows/code-generation) :** Learn how to define interfaces and models to tailor your generated code.
+- **[Working with Associations](/guides/advanced-patterns/associations) :** Explore type-safe handling of related records and relationships.
+- **[Template-Driven Queries: SQL Template DSL](/guides/advanced-patterns/template-dsl) :** Deepen your expertise on writing expressive, safe query templates.
+- **[Configuring the Generator](/getting-started/configuration-troubleshooting/configuring-generator) :** Customize generation with field mappings, filters, and output paths.
+
+---
+
+By following these best practices and examples, you will build robust, maintainable, and efficient database layers powered by GORM CLI's generated, type-safe APIs.
