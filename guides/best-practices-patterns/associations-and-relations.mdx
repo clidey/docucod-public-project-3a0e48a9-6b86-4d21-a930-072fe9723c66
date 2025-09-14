@@ -1,0 +1,274 @@
+---
+title: "Working With Associations"
+description: "Hands-on guide for managing entity relationships using association helpers. Details workflows for create, update, unlink, delete, and batch operations, with both conceptual explanation and code examples."
+---
+
+# Working With Associations
+
+This guide provides a hands-on approach to managing entity relationships in your GORM CLI generated code using association helpers. It covers workflows for creating, updating, unlinking, deleting, and batch operations on associations through practical code examples and clear explanations.
+
+---
+
+## 1. Understanding Association Helpers
+
+GORM CLI generates **association helpers** on your models under `field.Struct[T]` or `field.Slice[T]` types for related entities, such as `generated.User.Pets` or `generated.User.Account`.
+
+These helpers encapsulate common relational operations:
+
+- **Create**: Insert a new associated record and link it.
+- **CreateInBatch**: Batch create and link multiple associated records.
+- **Update**: Update associated records matching optional conditions.
+- **Unlink**: Remove the association links without deleting records (nullify foreign keys or remove join rows).
+- **Delete**: Remove associated records or join rows depending on relation type.
+
+These are used within a `Set(...).Update(ctx)` or `Set(...).Create(ctx)` call on a parent query.
+
+<Tip>
+Association helpers simplify managing complex relational data and enforce compile-time safety with fluent, discoverable APIs.
+</Tip>
+
+---
+
+## 2. Prerequisites
+
+Make sure you have:
+
+- Generated model-driven field helpers by running GORM CLI on your models.
+- A GORM database instance ready for use.
+- Basic familiarity with GORM CLI query and field helper usage.
+
+---
+
+## 3. Typical Association Workflow
+
+Use association helpers within a parent model query builder to perform operations on related entities. The typical pattern involves:
+
+1. Selecting parent records with `.Where(...)`.
+2. Calling `.Set(...)` with association operations.
+3. Finalizing with `.Update(ctx)` or `.Create(ctx)` to execute.
+
+
+<Steps>
+<Step title="Create a Single Associated Record">
+Use `.Create(...)` on a single-entity association helper to create and link one record per parent.
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(
+    generated.User.Pets.Create(
+      generated.Pet.Name.Set("fido"),
+    ),
+  ).
+  Update(ctx)
+```
+
+On success, each matched user will get one new pet named "fido" linked.
+</Step>
+
+<Step title="Create Multiple Parents Each with One Associated Record">
+Select multiple parent records and create one associated record per parent.
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.Name.In("alice", "bob")).
+  Set(
+    generated.User.Pets.Create(
+      generated.Pet.Name.Set("multi-pet"),
+    ),
+  ).
+  Update(ctx)
+```
+
+Two pets named "multi-pet" will be created and associated.
+</Step>
+
+<Step title="Update Associated Records with Conditions">
+Update only the associated records that meet conditions via `.Where()` chaining.
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("old")).
+      Update(generated.Pet.Name.Set("new")),
+  ).
+  Update(ctx)
+```
+
+Only pets named "old" linked to the user get updated.
+</Step>
+
+<Step title="Unlink Associations Without Deleting">
+Remove the association link but keep the associated records.
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(
+    generated.User.Pets.Unlink(),
+  ).
+  Update(ctx)
+```
+
+Removes links by nulling foreign keys or deleting join table rows, but associated records remain.
+</Step>
+
+<Step title="Delete Associated Records">
+Remove associated rows completely.
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(
+    generated.User.Pets.Delete(),
+  ).
+  Update(ctx)
+```
+
+Associated pet rows referenced will be deleted.
+</Step>
+
+<Step title="Batch Create and Link Multiple Records">
+Use `.CreateInBatch([]T)` to create and associate multiple records at once.
+
+```go
+pets := []models.Pet{{Name: "p1"}, {Name: "p2"}}
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(
+    generated.User.Pets.CreateInBatch(pets),
+  ).
+  Update(ctx)
+```
+
+Creates and links "p1" and "p2" to the user efficiently.
+</Step>
+</Steps>
+
+---
+
+## 4. Semantics Vary by Association Type
+
+| Association Type | Unlink Behavior                              | Delete Behavior             |
+|------------------|----------------------------------------------|----------------------------|
+| `belongs to`     | Set parent's FK to NULL                       | Delete associated row       |
+| `has one` / `has many` | Set child's FK to NULL                      | Delete child rows           |
+| `many2many`      | Remove join table rows only                   | Remove join rows only       |
+
+This ensures safe and consistent relation management according to database constraints.
+
+---
+
+## 5. Code Examples
+
+### Creating Associations
+
+```go
+// Create a new user and one pet
+_, err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+
+### Updating Associations With Conditions
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+      Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+```
+
+
+### Unlinking Associations
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Unlink(),
+  ).
+  Update(ctx)
+```
+
+
+### Deleting Associations
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Delete(),
+  ).
+  Update(ctx)
+```
+
+
+### Batch Creating Many2Many Associations
+
+```go
+langs := []models.Language{{Code: "EN"}, {Code: "FR"}}
+_, err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Languages.CreateInBatch(langs),
+  ).
+  Update(ctx)
+```
+
+---
+
+## 6. Best Practices
+
+- **Use `.Where()` to scope association operations** when you only want to affect certain related records.
+- **Prefer `.Unlink()` over `.Delete()`** if you want to preserve associated data but remove links.
+- **Batch operations (`.CreateInBatch`) improve performance** when creating many associations at once.
+- **Understand association types** (has one, belongs to, many2many) as behavior differs, preventing unwanted data loss.
+- **Test with small datasets first** to ensure your association modifications apply as expected.
+
+---
+
+## 7. Troubleshooting
+
+### Common Issues
+
+- **Association not created:** Verify `.Create()` is used inside `Set(...)` and followed by `Create(ctx)` or `Update(ctx)`.
+- **Condition filters ignored:** Ensure you properly chain `.Where(...)` before `.Update()` or `.Delete()`.
+- **Foreign key null not applied on unlink:** Confirm your database schema allows nullable foreign keys.
+- **Deleting associations deletes unrelated records:** Double-check `.Where()` conditions to not overly broad apply deletions.
+
+### Tips
+
+- Use logging or SQL tracing on GORM to see generated queries.
+- Review parent and child model definitions for correct GORM tags.
+- Check for database constraints that may prevent unlinking or deletion.
+
+---
+
+## 8. Next Steps
+
+- Explore how to **combine association operations with query filters** for complex updates.
+- Study the [template-based queries guide](../best-practices-patterns/template-based-queries) to complement association management.
+- Review [working with basic fields](../best-practices-patterns/working-with-basic-fields) to enhance your CRUD workflows.
+- Use **generated tests** in `examples/output/models_relations_test.go` as reference implementations.
+
+---
+
+## 9. Additional Resources
+
+- [GORM CLI Overview](../../overview/product-intro/value-proposition)
+- [Core Concepts & Terminology](../../overview/architecture-core-concepts/core-concepts-terminology)
+- [Using Generated APIs](../core-workflows/using-generated-apis)
+- [Customization & Configuration](../core-workflows/customizing-generation-config)
+
+---
+
+This page focuses exclusively on working with association helpers to efficiently manage relational data in GORM CLI generated applications, supporting a seamless user experience with concrete, actionable guidance and comprehensive code examples.
