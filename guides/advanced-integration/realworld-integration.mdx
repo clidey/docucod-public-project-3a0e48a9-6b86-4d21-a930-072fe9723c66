@@ -1,0 +1,321 @@
+---
+title: "Integrating Generated APIs into Your Application"
+description: "Best practices for cleanly incorporating generated query and field helper APIs into existing Go codebases, including project organization, testing strategies, and common troubleshooting suggestions."
+---
+
+# Integrating Generated APIs into Your Application
+
+## Workflow Overview
+
+This guide focuses on how to seamlessly integrate the generated query APIs and model-driven field helpers produced by GORM CLI into your existing Go application codebase. It covers best practices for project organization, strategies for testing generated code, and common troubleshooting tips to maintain code clarity and reliability.
+
+### Prerequisites
+
+- Completed code generation with GORM CLI, producing query and field helper code.
+- A Go project using GORM as the ORM layer.
+- Familiarity with Go modules and package imports.
+
+### Expected Outcome
+
+By following this guide, you will have a clean, maintainable structure embedding the generated APIs, robust testing patterns to ensure correctness, and practical readiness to troubleshoot common integration pitfalls.
+
+### Time Estimate
+
+15-30 minutes, depending on prior setup and testing depth.
+
+### Difficulty Level
+
+Intermediate - requires familiarity with Go project structure, GORM usage, and testing practices.
+
+---
+
+## Step-by-Step Instructions
+
+### 1. Organize Generated Code in a Dedicated Package
+
+- **Action:** Configure GORM CLI to output generated code into a dedicated subdirectory or package (e.g., `/generated`). Use the `OutPath` in your `genconfig.Config` or CLI `-o` flag.
+
+- **Why:** Isolating generated code avoids cluttering your business logic and simplifies dependency management.
+
+- **Example:**
+  ```go
+  var _ = genconfig.Config{
+      OutPath: "generated",
+  }
+  ```
+
+- **Result:** Your generated APIs (queries, field helpers) live distinctly, promoting cleaner imports.
+
+
+### 2. Import Generated APIs Thoughtfully
+
+- In your application code, import the generated package using an explicit alias:
+
+  ```go
+  import (
+      "context"
+      "gorm.io/gorm"
+      generated "your/module/path/generated"
+  )
+  ```
+
+- Use the generated query APIs by passing your GORM DB instance. 
+
+- **Example:**
+
+  ```go
+  func GetUserByID(ctx context.Context, db *gorm.DB, id int) (generated.User, error) {
+      return generated.Query[generated.User](db).GetByID(ctx, id)
+  }
+  ```
+
+- **Success Criteria:** Calls are type-safe, discoverable by IDE auto-completion, and clear in intent.
+
+
+### 3. Leverage Generated Model Field Helpers for Filters and Updates
+
+- Use the strong typed field helpers to build conditions and update statements.
+
+- **Example:**
+  ```go
+  users, err := gorm.G[generated.User](db).
+      Where(generated.User.Age.Gt(18)).
+      Find(ctx)
+  ```
+
+- For updates, chain with `Set(...)` and standard GORM methods:
+
+  ```go
+  err := gorm.G[generated.User](db).
+      Where(generated.User.ID.Eq(1)).
+      Set(generated.User.Name.Set("Alice"), generated.User.IsActive.Set(true)).
+      Update(ctx)
+  ```
+
+- **Benefits:** Avoid string literals, reduce runtime errors, and improve readability.
+
+
+### 4. Structure Application Code to Separate Business Logic from Generated Code
+
+- Define your own repository or service layers that encapsulate usage of generated APIs.
+
+- This way, underlying generated code location or signature changes won't ripple through your entire codebase.
+
+- **Example:**
+  ```go
+  type UserRepo struct {
+      db *gorm.DB
+  }
+
+  func NewUserRepo(db *gorm.DB) *UserRepo {
+      return &UserRepo{db: db}
+  }
+
+  func (r *UserRepo) GetByID(ctx context.Context, id int) (generated.User, error) {
+      return generated.Query[generated.User](r.db).GetByID(ctx, id)
+  }
+
+  func (r *UserRepo) UpdateName(ctx context.Context, id int, name string) error {
+      return gorm.G[generated.User](r.db).
+          Where(generated.User.ID.Eq(id)).
+          Set(generated.User.Name.Set(name)).
+          Update(ctx)
+  }
+  ```
+
+- **Outcome:** Clear separation enhances maintainability and testing.
+
+
+### 5. Testing Strategies
+
+- **Unit Test Your Wrappers:** Write tests against your business/repository functions that wrap generated code. These tests ensure that any changes or regeneration do not cause regressions.
+
+- **Mocking DB:** Use in-memory databases or mock GORM where possible to isolate testing.
+
+- **Integration Tests:** Validate generated queries execute successfully against real test databases.
+
+- **Example Test Skeleton:**
+  ```go
+  func TestUserRepo_GetByID(t *testing.T) {
+      db, clean := setupTestDB(t)
+      defer clean()
+
+      repo := NewUserRepo(db)
+      user, err := repo.GetByID(context.Background(), 1)
+
+      if err != nil {
+          t.Fatalf("unexpected error: %v", err)
+      }
+      if user.ID != 1 {
+          t.Errorf("expected user id 1, got %d", user.ID)
+      }
+  }
+  ```
+
+- **Tip:** Avoid calling generated code directly in tests unless testing the generated code's correctness itself.
+
+
+### 6. Handle Regeneration Cleanly
+
+- When regenerating code after interface or model updates, ensure:
+  - Your imports remain unchanged or updated accordingly.
+  - Regenerated files do not overwrite any handwritten customizations (keep them separated).
+  - Run build and tests after regeneration to verify no breaking changes.
+
+- **Best Practice:** Commit generated code excluding uncommitted modifications to avoid accidental loss.
+
+
+### 7. Troubleshooting Common Integration Issues
+
+<AccordionGroup title="Common Integration Issues and Resolutions">
+<Accordion title="Import or Package Path Errors">
+If your application code cannot find generated code:
+- Verify your `OutPath` corresponds to your import path.
+- Check Go module paths and replace imports accordingly.
+- Run `go mod tidy` after adding generated packages.
+</Accordion>
+<Accordion title="Generated Code Not Found after Regeneration">
+- Confirm generation completed successfully with no errors.
+- Validate `-o` output directory and relative package structure.
+- Check for include/exclude filters in `genconfig.Config` that may skip code.
+</Accordion>
+<Accordion title="Type Mismatches or Missing Methods">
+- Confirm your interface definitions and SQL templated comments are well formed.
+- Look for build errors specifying missing generated methods.
+- Re-run generation and ensure no method warnings in CLI logs.
+</Accordion>
+<Accordion title="Runtime Errors in Queries or Updates">
+- Ensure DB initialization and model registration with GORM are correct.
+- Debug SQL generated by GORM CLI by inspecting logs or intercepting queries.
+- Validate usage of field helpers follows documented patterns.
+</Accordion>
+</AccordionGroup>
+
+
+## Examples & Code Samples
+
+### Basic Usage Example
+
+```go
+package repository
+
+import (
+	"context"
+	"gorm.io/gorm"
+	generated "your/module/path/generated"
+)
+
+func FindAdultUsers(ctx context.Context, db *gorm.DB) ([]generated.User, error) {
+	return gorm.G[generated.User](db).
+		Where(generated.User.Age.Gt(18)).
+		Find(ctx)
+}
+```
+
+
+### Updating User and Their Pets in Transaction
+
+```go
+func UpdateUserAndPets(ctx context.Context, db *gorm.DB, id int, newName string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		// Update user's name
+		err := gorm.G[generated.User](tx).
+			Where(generated.User.ID.Eq(id)).
+			Set(generated.User.Name.Set(newName)).
+			Update(ctx)
+		if err != nil {
+			return err
+		}
+
+		// Unlink all pets
+		return gorm.G[generated.User](tx).
+			Where(generated.User.ID.Eq(id)).
+			Set(generated.User.Pets.Unlink()).
+			Update(ctx)
+	})
+}
+```
+
+
+### Using Custom Field Helpers
+
+Assuming you have mapped JSON fields:
+
+```go
+users, err := gorm.G[generated.User](db).
+	Where(generated.User.Profile.Equal("$.vip", true)).
+	Find(ctx)
+```
+
+
+## Troubleshooting & Tips
+
+### Common Issues
+
+- **Generation Skips Interfaces or Structs:** Check your `genconfig.Config` include/exclude lists to avoid unintentionally excluding targets.
+- **SQL Template Errors:** Verify your SQL comments in interfaces for placeholders match method parameters and are syntactically correct.
+- **Build Failures After Regeneration:** Ensure dependencies and imports are up to date. Run `go mod tidy` and verify version requirements.
+
+### Best Practices
+
+- Keep generated code separate from handwritten logic.
+- Wrap generated calls to maintain flexibility and testability.
+- Maintain version control discipline around generated files.
+- Regularly run tests after regeneration.
+- Use clear naming conventions that match your model domain.
+
+### Performance Considerations
+
+- While generated APIs are type-safe and fluent, monitor query-generated code for overly complex SQL which might impact runtime.
+- Use the SQL template DSL judiciously to write concise queries.
+
+### Alternative Approaches
+
+- For very complex queries, write manual GORM code or use raw SQL as fallback.
+- Extend generated APIs with custom interfaces and augment generation using `genconfig.Config` mappings.
+
+
+## Next Steps & Related Content
+
+- Review **[Interface-Driven Query APIs: From Template to Usage](/guides/query-and-model-helpers/interface-driven-queries)** to deepen understanding of defining and using query interfaces.
+- Explore **[Model Field Helpers: Filters, Updates, and Predicates](/guides/query-and-model-helpers/model-driven-field-helpers)** for advanced manipulation of model-derived helpers.
+- See **[Working with Associations: Patterns and Pitfalls](/guides/query-and-model-helpers/association-guides)** for practical tips on managing relations.
+- For extending and customizing generation, consult **[Custom Field Helpers: JSON Mapping and Beyond](/guides/advanced-integration/custom-helper-json)**.
+
+
+---
+
+## Summary
+
+Integrating GORM CLI generated APIs into your application requires thoughtful project organization, effective import and usage of generated code, and a sound testing strategy. This guide provides actionable, practical steps to seamlessly embed the generated query and field helper APIs, ensuring maintainability and type safety while addressing common issues through troubleshooting tips.
+
+### Key Sections
+
+- Workflow Overview
+- Organizing Generated Code
+- Importing and Using Generated APIs
+- Wrapping Generated Code in Repositories and Services
+- Testing Approaches
+- Troubleshooting Common Integration Issues
+- Best Practices and Examples
+- Next Steps and Related Documentation
+
+### Important References
+
+- [Interface-Driven Query APIs: From Template to Usage](https://your-docs/guides/query-and-model-helpers/interface-driven-queries)
+- [Model Field Helpers](https://your-docs/guides/query-and-model-helpers/model-driven-field-helpers)
+- [Association Usage Guide](https://your-docs/guides/query-and-model-helpers/association-guides)
+- [Custom Helper JSON Guide](https://your-docs/guides/advanced-integration/custom-helper-json)
+
+### Cross-References
+
+To ensure full lifecycle success, combine this integration guide with initial setup guides such as [Quickstart Workflow](https://your-docs/guides/getting-started/quickstart-workflow) and configuration details from [Generation Config Basics](https://your-docs/guides/getting-started/generation-config-basics).
+
+### Action Items
+
+- Configure generation output consistently.
+- Implement thin repository/service layers over generated code.
+- Develop unit and integration tests targeting your wrappers.
+- Regularly validate generated code post-regeneration.
+
+This strategy ensures that GORM CLI generated APIs empower your application with robust, maintainable, and type-safe database access.

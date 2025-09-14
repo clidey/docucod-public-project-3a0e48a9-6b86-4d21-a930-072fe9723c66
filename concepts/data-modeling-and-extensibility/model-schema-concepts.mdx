@@ -1,0 +1,268 @@
+---
+title: "Modeling Schemas: Fields, Types, and Associations"
+description: "Examine how basic fields, composite types, and associations are detected and expressed in generated helpers. Includes rules for field eligibility, association mapping, and treatment of custom types."
+---
+
+# Modeling Schemas: Fields, Types, and Associations
+
+In this guide, you'll explore how GORM CLI analyzes your Go model structs to generate strongly-typed field helpers and association APIs. Understanding these concepts empowers you to write fluent, type-safe database queries and modifications with confidence.
+
+---
+
+## Understanding Field and Association Detection
+
+GORM CLI uses static analysis of your Go structs to determine how each field should be treated when generating field helpers. These helpers enable compile-time safe predicates, updates, and associations operations.
+
+### Key Goals of the Model Schema Analysis
+
+- **Identify Basic Fields:** Recognize standard data types (ints, strings, bools, times) and construct corresponding field helpers
+- **Detect Composite/Nested Types:** Handle embedded structs and named types with custom serialization
+- **Map Relationships:** Properly detect GORM associations—has one, belongs to, has many, many2many—including polymorphic
+- **Respect Customizations:** Honor struct tags and user configuration for type mapping
+
+---
+
+## Basic Fields: Identification and Helper Generation
+
+Basic fields are the backbone of your model's data, typically corresponding to a single database column.
+
+### Supported Basic Field Types
+
+- Primitive types like `int`, `string`, `bool`, and their variants
+- Time types such as `time.Time` and nullable forms like `sql.NullTime`
+- Byte slices `[]byte`
+- Named types implementing known interfaces (`Scanner`, `Valuer`, `SerializerInterface`)
+
+### How Basic Fields Are Represented
+
+Each basic field is generated as a strongly typed helper matching its Go type:
+
+```go
+var User = struct {
+  Name field.String
+  Age  field.Number[int]
+  IsAdult field.Bool
+  Birthday field.Time
+  Score field.Field[sql.NullInt64]
+}{
+  Name: field.String{}.WithColumn("name"),
+  Age: field.Number[int]{}.WithColumn("age"),
+  IsAdult: field.Bool{}.WithColumn("is_adult"),
+  Birthday: field.Time{}.WithColumn("birthday"),
+  Score: field.Field[sql.NullInt64]{}.WithColumn("score"),
+}
+```
+
+### Using Struct Tags and Configuration
+
+- Fields with tags like `gen:"json"` can be mapped to custom helpers (e.g., JSON)
+- The generator scans your package-level `genconfig.Config` for type or name mappings to override defaults
+
+<Tip>
+Map your custom types or struct tag-affiliated fields using `genconfig.Config` to ensure generated helpers reflect your application's needs precisely.
+</Tip>
+
+---
+
+## Composite Types and Embedded Fields
+
+### Dealing with Embedded Structs
+
+Embedded anonymous structs, including those imported from other packages, are recursively processed. Their fields are flattened into the parent struct’s helper set to maintain intuitive usage:
+
+```go
+// Example of embedded fields being included transparently in User helpers
+var User = struct {
+  // ... fields from User ...
+  EmbeddedField field.String
+}{
+  // ... initialization ...
+  EmbeddedField: field.String{}.WithColumn("embedded_field"),
+}
+```
+
+### Named Composite Types
+
+Named struct types nested in your model become `field.Struct[T]` helpers, enabling helper chains into nested data.
+
+For example, the `Account` field in `User` is generated as:
+
+```go
+Account field.Struct[models.Account]
+```
+
+---
+
+## Associations: Detection and Helper Generation
+
+Associations capture relationships between models. GORM CLI detects association types by analyzing struct field types and GORM tags.
+
+### Supported Associations
+
+| Association Type | Description                                            | Helper Type                 |
+| ---------------- | ------------------------------------------------------ | --------------------------- |
+| Has One          | One-to-one child record                                | `field.Struct[T]`           |
+| Belongs To       | Child refers to a parent with a foreign key           | `field.Struct[T]`           |
+| Has Many         | One-to-many child records                              | `field.Slice[T]`            |
+| Many-to-Many     | Many-to-many with join tables                          | `field.Slice[T]`            |
+| Polymorphic      | Allows a model to belong to multiple other models     | Polymorphic association via `field.Struct[T]` or `field.Slice[T]` |
+
+### Examples from `User` Model
+
+```go
+Pets      field.Slice[models.Pet]       // has many
+Account   field.Struct[models.Account]  // has one
+Company   field.Struct[models.Company]  // belongs to
+Languages field.Slice[models.Language]  // many2many
+Toys      field.Slice[models.Toy]       // has many polymorphic
+```
+
+### Semantic Notes on Generated Helpers
+
+- **Naming:** Association fields use the Go struct field name (e.g., `Pets`, `Account`)
+- **Helper Types:** `field.Struct[T]` for single-object associations; `field.Slice[T]` for collections
+- **Filtering and Operations:** Association helpers provide chaining for filtered updates, creation, unlinking, and deletion
+
+<Tip>
+Associations allow you to atomically manipulate related data via chainable, type-safe methods, eliminating error-prone manual joins or foreign key manipulations.
+</Tip>
+
+---
+
+## Rules for Associations and Field Eligibility
+
+### Field Eligibility for Generation
+
+- Fields must be exported (public Go fields)
+- Fields not explicitly ignored by tags or configuration
+- Pointer and slice fields indicating relations or optional data
+
+### How the Generator Infers Association Types
+
+- Based on field type (**single struct**, **pointer struct**, or **slice of structs/pointers**)
+- GORM tag directives such as `gorm:"many2many:"` or `gorm:"polymorphic:"`
+- Foreign key presence or naming conventions
+
+### Polymorphic Associations
+
+Polymorphic relations are detected via `gorm:"polymorphic:<Name>"` tags and handled as collection or single association helpers with proper owner typing.
+
+---
+
+## Custom Types and Tag-Driven Mapping
+
+You can influence the generated field helpers using:
+
+- The `gen:"<helperName>"` struct tag (e.g., `gen:"json"`)
+- Package-level `genconfig.Config` for overriding default type mappings and field name mappings, e.g.: 
+
+```go
+var _ = genconfig.Config{
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+  },
+  FieldNameMap: map[string]any{
+    "json": JSON{},
+  },
+}
+```
+
+This allows assigning custom behaviors and SQL generation for specific fields.
+
+<Warning>
+Be cautious when customizing field mappings; improper settings can cause mismatches with your database schema or incorrect query generation.
+</Warning>
+
+---
+
+## Summary Table of Field Helper Types
+
+| Go Field Type Example        | Generated Helper Type           | Description                            |
+| ----------------------------| -------------------------------| -------------------------------------|
+| `string`                   | `field.String`                 | Standard text field                    |
+| `int`, `int64`             | `field.Number[int]`            | Numeric field                         |
+| `bool`                     | `field.Bool`                   | Boolean field                        |
+| `time.Time`                | `field.Time`                   | Timestamp and date fields            |
+| `sql.NullInt64`            | `field.Field[sql.NullInt64]`   | Nullable integer field               |
+| Custom named types         | `field.Field[T]` or custom    | Based on your mapping configuration  |
+| Struct (single)            | `field.Struct[T]`              | Has one / belongs to association     |
+| Slice of structs           | `field.Slice[T]`               | Has many / many-to-many association  |
+
+---
+
+## Practical Tips and Best Practices
+
+- Always export your model struct fields to ensure they are included in generation.
+- Use `genconfig.Config` to map complex or non-standard types for correct helper generation.
+- Use embedded structs for reusability without cluttering generated helpers.
+- When working with polymorphic associations, carefully apply `gorm:"polymorphic"` tags to reflect model ownership semantics.
+- Prefer explicit association tags when your schema deviates from common naming conventions to guide accurate generation.
+
+<Check>
+Run `gorm gen` after adjusting your models or config to regenerate helpers reflecting your latest schema changes.
+</Check>
+
+---
+
+## Troubleshooting Common Pitfalls
+
+<AccordionGroup title="Troubleshooting Field and Association Generation">
+<Accordion title="My new field isn't appearing in generated code">
+Ensure the field is exported (capitalized) and not excluded by configuration or tags. Also, verify the `genconfig.Config` does not exclude the struct.
+</Accordion>
+<Accordion title="Custom type mapping doesn't work as expected">
+Check that your `FieldTypeMap` or `FieldNameMap` in `genconfig.Config` uses the exact Go type or tag name. Rebuild to ensure config is loaded.
+</Accordion>
+<Accordion title="Association helper types don't match the expected relation">
+Confirm that your GORM tags like `gorm:"foreignKey:<field>"`, `many2many`, and `polymorphic` are correctly applied and that your field types correspond to single (struct or pointer) or multiple (slice) associations.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Visualizing Model Field and Association Generation
+
+```mermaid
+graph TD
+  User["User Struct"] -->|has one| Account["Account (field.Struct)"]
+  User -->|has many| Pets["Pets (field.Slice)"]
+  User -->|has many (polymorphic)| Toys["Toys (field.Slice)"]
+  User -->|belongs to| Company["Company (field.Struct)"]
+  User -->|many to many| Languages["Languages (field.Slice)"]
+
+  Account -->|basic fields| BasicFields_Account["ID, Number, RewardPoints..."]
+  Pets -->|basic fields + association| PetFields["Name, UserID, Toy"]
+  Toys -->|basic fields| ToyFields["Name, OwnerID, OwnerType"]
+  Languages -->|basic fields| LanguageFields["Code, Name"]
+
+  User -->|basic fields| BasicFields_User["Name, Age, Birthday, IsAdult, Role, ..."]
+  BasicFields_User --> Name
+  BasicFields_User --> Age
+  BasicFields_User --> Birthday
+  BasicFields_User --> IsAdult
+
+  classDef assoc fill:#f9f,stroke:#f66,stroke-width:2px
+  class User,Account,Pets,Toys,Company,Languages assoc
+```
+
+This diagram summarizes the detected relationships and how the generator maps them to helpers.
+
+---
+
+## Summary
+
+Understanding how GORM CLI models your data through fields, types, and associations empowers you to generate expressive, type-safe query and update helpers. By adhering to conventions and leveraging configuration for custom behavior, you can unlock seamless integration with your database schema and achieve safer, maintainable data access patterns.
+
+For detailed usage with these generated helpers, see the [Model Field Helpers and Associations guide](https://docs.gorm.io/cli/gorm/guides/query-and-model-helpers/model-driven-field-helpers) and related association operations documentation.
+
+---
+
+## See Also
+
+- [Interface-Driven Query APIs & Template Language](concepts/core-architecture/interface-and-template-approach)
+- [Model Field Helpers: Filters, Updates, and Predicates](guides/query-and-model-helpers/model-driven-field-helpers)
+- [Working with Associations: Patterns and Pitfalls](guides/query-and-model-helpers/association-guides)
+- [Customizing Generation with Config](concepts/data-modeling-and-extensibility/customization-via-config)
+- [Custom Field Helpers: JSON and Beyond](guides/advanced-integration/custom-helper-json)
+
+---
