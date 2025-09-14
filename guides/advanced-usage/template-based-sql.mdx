@@ -1,0 +1,254 @@
+---
+title: "Writing Template-Based SQL for Complex Queries"
+description: "Delve into GORM CLI’s template-based SQL capabilities. Learn how to utilize directives like @@table, @param, and block expressions to craft flexible, reusable queries. Covers conditional logic and common patterns for efficient query construction."
+---
+
+# Writing Template-Based SQL for Complex Queries
+
+Delve into GORM CLI's powerful template-based SQL capabilities to craft flexible, reusable, and complex queries directly in your Go interfaces. This guide shows how to leverage directives like `@@table`, `@param`, `{{where}}` blocks, and conditional logic to write dynamic query methods that generate efficient SQL with type safety and clarity.
+
+---
+
+## Workflow Overview
+
+### What This Guide Helps You Accomplish
+This guide instructs you on writing SQL queries inside Go interface method comments using GORM CLI's templating DSL. You'll learn to embed directives and control structures to create dynamic queries, supporting parameters, conditional filters, loops, and updates. The end goal is reusable, maintainable, and type-safe query implementations generated automatically by the CLI.
+
+### Prerequisites
+- You have GORM CLI installed and accessible.
+- Basic understanding of Go interfaces and methods.
+- Familiarity with Go structs representing your database models.
+- Basics of SQL syntax.
+- A codebase with Go interface(s) where you can add annotated query methods.
+
+### Expected Outcome
+By following this guide, you will be able to:
+- Write annotated SQL templates in interface method comments.
+- Use built-in directives like `@@table`, `@param`, and template blocks.
+- Implement conditional logic (`{{if}}`, `{{else if}}`, `{{else}}`) and loops (`{{for}}`) in queries.
+- Define dynamic `WHERE` and `SET` clauses.
+- Create clean, maintainable query interfaces that generate type-safe code.
+
+### Time Estimate
+Approximately 20–30 minutes to grasp the key directives and try practical examples.
+
+### Difficulty Level
+Intermediate — requires basic SQL and Go interface knowledge.
+
+---
+
+## Step-by-Step Instructions
+
+### 1. Start with a Basic Query Interface
+Define a Go interface representing your queries, adding your SQL template as a comment above each method.
+
+```go
+// Query[T any] defines database operations returning type T.
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+}
+```
+
+- `@@table` is a directive that dynamically resolves to your model's database table.
+- `@id` binds the Go method parameter `id` safely as a SQL parameter.
+
+### 2. Use Template Directives for Conditional Clauses
+Add dynamic WHERE clauses using `{{where}}` and `{{if}}` blocks. For example:
+
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{if name != ""}} name=@name {{end}}
+//   {{if age > 0}} AND age=@age {{end}}
+// {{end}}
+FilterByNameAndAge(name string, age int) ([]T, error)
+```
+
+- The `{{where}}` block wraps conditions and only emits `WHERE` if body content is non-empty.
+- `{{if}}` statements let you conditionally add filters based on parameters.
+
+### 3. Applying `{{set}}` for Updates
+For update queries, use the `{{set}}` block with conditional assignments:
+
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age, {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+
+- `{{set}}` ensures that the `SET` clause is only added if content is present.
+- Commas are trimmed automatically, so you don't worry about trailing commas.
+
+### 4. Incorporate Conditional Logic (`if`, `else if`, `else`)
+You can use full conditional chains inside templates for sophisticated logic:
+
+```go
+// SELECT * FROM @@table
+// {{if user.ID > 0}}
+//   WHERE id=@user.ID
+// {{else if user.Name != ""}}
+//   WHERE name=@user.Name
+// {{else}}
+//   WHERE created_at > @someDate
+// {{end}}
+QueryWith(user User) (T, error)
+```
+
+- This provides full branching logic for query conditions.
+
+### 5. Iterate Collections with `{{for}}`
+For dynamic multi-item conditions, use `{{for}}` loops:
+
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{for _, user := range users}}
+//     {{if user.Name != "" && user.Age > 0}}
+//       (name=@user.Name AND age=@user.Age) OR
+//     {{end}}
+//   {{end}}
+// {{end}}
+Filter(users []User) ([]T, error)
+```
+
+- This builds WHERE clauses dynamically from slices.
+- Don't worry about the trailing OR — the generator trims connectors.
+
+### 6. Use Dynamic Column and Table Bindings
+Use `@@column` to bind column names dynamically and `@@table` for table names:
+
+```go
+// SELECT * FROM @@table WHERE @@column=@value
+FilterWithColumn(column string, value string) (T, error)
+```
+
+- This allows passing in arbitrary column names as safe SQL identifiers.
+
+### 7. Understand Parameter Binding
+- The `@param` directive automatically binds Go method parameters to SQL parameters safely.
+- Escape `@` signs in literals using a backslash, e.g. `"\@name"` to output `@name` literally.
+
+### 8. Run Generation and Use Generated APIs
+After defining interfaces with templates, generate the code:
+
+```bash
+gorm gen -i ./path/to/your/interfaces -o ./generated
+```
+
+Use the generated APIs as normal methods on the returned interface.
+
+---
+
+## Examples & Code Samples
+
+### Example Interface with Complex Query
+```go
+// Query[T any] demonstrates conditional logic, iteration, and binding.
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{if name != ""}} name=@name {{end}}
+  //   {{if age > 0}} AND age=@age {{end}}
+  // {{end}}
+  FindByNameAndAge(name string, age int) ([]T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateUser(user User, id int) error
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{for _, tag := range tags}}
+  //     {{if tag != ""}} tags LIKE concat("%", @tag, "%") OR {{end}}
+  //   {{end}}
+  // {{end}}
+  SearchByTags(tags []string) ([]T, error)
+}
+```
+
+### Generated SQL snippets (conceptual)
+- `SELECT * FROM users WHERE id=?` with `id` parameter.
+- `UPDATE users SET name=?, age=? WHERE id=?` dynamically omits empty fields.
+- `SELECT * FROM users WHERE (tags LIKE concat('%', ?, '%')) OR ...` iterated over tags.
+
+---
+
+## Troubleshooting & Tips
+
+### Common Issues
+- **SQL Template Syntax Errors:** Check balance of `{{if}}` / `{{end}}`, missing `}}` or malformed directives.
+- **Incorrect Parameter Bindings:** Ensure method parameters match placeholders exactly — `@paramName` binds to method param `paramName`.
+- **Wrong Column/Table Names:** Use `@@table` and `@@column` for dynamic binding instead of inline text to avoid SQL injection.
+- **Trailing connectors (AND/OR):** The CLI trims leading/trailing connectors but ensure you do not hard-code connectors outside of `{{where}}` blocks.
+
+### Best Practices
+- Always use `@@table` for table references, never hardcode table names.
+- Use `@param` binding exclusively for safe parameter insertion.
+- Write concise, conditional blocks and leverage `{{where}}` and `{{set}}` for automatic clause management.
+- Use `{{for}}` loops to iterate slices safely.
+- Escape `@` with `\@` inside string literals if you need a literal `@`.
+- Test query interface methods to verify generated SQL correctness and expected bindings.
+
+### Performance Considerations
+- Keep dynamic parts limited to necessary filters to enable query plan reuse.
+- Avoid heavy loops that generate large SQL strings; use batch ops in your code when possible.
+
+### Alternative Approaches
+If template-based SQL becomes complex or hard to maintain:
+- Consider breaking queries into smaller reusable interfaces.
+- Use generated model-driven field helpers for simpler predicates.
+- Combine generated APIs with manual GORM queries where needed.
+
+---
+
+## Next Steps & Related Content
+
+- Explore [Generating Type-Safe Query APIs](/guides/core-workflows/type-safe-query-apis) to deepen your understanding of interface-driven query generation.
+- Learn about [Field Helpers](/guides/core-workflows/field-helper-usage) to simplify predicate construction and updates.
+- Review [Customizing Code Generation with genconfig](/guides/advanced-usage/generation-configuration) for tailoring output.
+- Troubleshoot using [Common Issues & Fixes](/getting-started/configuration-validation/troubleshooting).
+
+---
+
+## Reference Table of Template DSL Directives
+
+| Directive   | Purpose                             | Example                                         |
+| ----------- | ---------------------------------- | ----------------------------------------------- |
+| `@@table`   | Model's table name                 | `SELECT * FROM @@table WHERE id=@id`             |
+| `@@column`  | Dynamic column identifier          | `WHERE @@column=@value`                          |
+| `@param`    | Bind Go method parameter           | `WHERE name=@user.Name`                          |
+| `{{where}}` | Conditional WHERE block             | `{{where}} age > 18 {{end}}`                     |
+| `{{set}}`   | Conditional SET block (UPDATE)      | `{{set}} name=@name {{end}}`                     |
+| `{{if}}`    | Conditional fragment inclusion      | `{{if age > 0}} AND age=@age {{end}}`            |
+| `{{else if}}`| Else-if in conditional chains      | `{{else if no > 0}} ... {{end}}`                  |
+| `{{else}}`   | Else clause in conditional chains  | `{{else}} ... {{end}}`                            |
+| `{{for}}`   | Loop over collections               | `{{for _, tag := range tags}} ... {{end}}`       |
+
+---
+
+## Troubleshooting Example
+
+<AccordionGroup title="Common Error Patterns">
+<Accordion title="Unmatched {{end}} or missing directives">
+Ensure every opening directive ({{if}}, {{for}}, {{where}}, {{set}}) has a matching {{end}}. The generator will fail if blocks are unbalanced.
+</Accordion>
+<Accordion title="Incorrect parameter names in @param">
+Verify that parameters you use with `@` exactly match method parameter names, including case sensitivity.
+</Accordion>
+<Accordion title="Literal '@' sign in string"
+>
+Escape `@` signs inside string literals with a backslash: use `\@` to output a literal `@` instead of starting a param.
+</Accordion>
+</AccordionGroup>
