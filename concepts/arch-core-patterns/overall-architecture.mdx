@@ -1,0 +1,196 @@
+---
+title: "Overall System Architecture"
+description: "Understand the high-level architecture of GORM CLI: how the core command-line tool, code generators, and template engines interact to create type-safe, composable APIs from user-defined interfaces and models. Clarifies roles of main entry points, generator components, and their coordination."
+---
+
+# Overall System Architecture of GORM CLI
+
+Understand how GORM CLI’s components collaborate to transform user-defined Go interfaces and models into fully generated, type-safe, and composable query APIs. This high-level overview clarifies the roles and interactions between core parts including the CLI command, the code generator, the template engine, and the output artifacts.
+
+---
+
+## Introduction
+
+GORM CLI is designed to automate the creation of type-safe query APIs and field helpers from your Go source code. Its architecture centers on parsing input Go files containing:
+
+- **Query Interfaces**: Interfaces annotated with SQL templates allowing dynamic query generation.
+- **Model Structs**: Go structs representing database models.
+- **Optional Configs**: Customization declarations guiding generation behavior.
+
+The system produces code that integrates seamlessly with the GORM ORM, boasting fluent, compile-time safe APIs.
+
+Understanding the overall architecture helps users appreciate the code flow from source to generated artifacts and how to customize or extend their usage effectively.
+
+---
+
+## Architectural Components and Their Roles
+
+### 1. Command-Line Tool (CLI)
+
+- **Purpose**: The primary user entry point for generating code.
+- **Implemented As**: The `gorm` command with subcommands, notably `gen`.
+- **Key Responsibility**: Accepts user input flags (`--input`, `--output`), initializes the generator, and handles execution errors.
+
+### 2. Generator Component
+
+- **Core Class**: `Generator` struct manages parsing files and generating code.
+- **Processing**:
+  - Traverses directories or single Go files specified by `--input`.
+  - Parses each file’s AST to extract interfaces, structs, and configuration declarations.
+  - Applies inclusion/exclusion filters based on configurations.
+- **Generation**:
+  - Applies templates to produce Go source files that implement user-defined query interfaces and generate field helper structs.
+
+### 3. Template Engine
+
+- **Nature**: Uses Go's standard `text/template` with embedded helper logic.
+- **Templates**:
+  - Define how interfaces translate into concrete implementations.
+  - Construct method bodies embedding SQL templates into executable query code.
+  - Synthesize field helper structs to enable type-safe queries and updates.
+
+---
+
+## System Workflow: From User Input to Generated APIs
+
+```mermaid
+flowchart TD
+  subgraph User
+    Developer["Developer Writes Go Interfaces & Models"]
+  end
+
+  subgraph CLI
+    CLI["gorm CLI Command"]
+  end
+
+  subgraph Generator
+    Parse["Parse Go Source(k AST)"]
+    Config["Read genconfig.Config"]
+    Filter["Apply Include/Exclude Filters"]
+    Template["Generate Code via Templates"]
+  end
+
+  subgraph Output
+    Files["Generated Go Code Files"]
+  end
+
+  Developer -->|Runs 'gorm gen'| CLI
+  CLI --> Generator
+  Generator --> Parse
+  Parse --> Config
+  Config --> Filter
+  Filter --> Template
+  Template --> Files
+
+  Files -->|Import in Project| Developer
+
+  classDef user fill:#acf,stroke:#066,stroke-width:2px,color:#044;
+  classDef cli fill:#f9f,stroke:#933,stroke-width:2px,color:#600;
+  classDef gen fill:#ccf,stroke:#336,stroke-width:2px,color:#224;
+  classDef output fill:#cfc,stroke:#363,stroke-width:2px,color:#252;
+  class Developer user
+  class CLI cli
+  class Parse,Config,Filter,Template gen
+  class Files output
+```
+
+---
+
+## Detailed Roles & Descriptions
+
+### Developer Interaction
+
+You start by defining:
+
+- **Query Interfaces** with methods annotated by SQL templates in Go doc comments. These enable declarative, dynamic queries bound to Go types.
+- **Model Structs** that represent your database tables, including fields and associations.
+- **Optional Generator Configs** to influence how generation behaves (output directories, filter rules, type mappings).
+
+### CLI Command Details
+
+- Uses [spf13/cobra](https://github.com/spf13/cobra) to manage commands and flags.
+- The `gen` command requires an input directory or file and an output directory.
+- Runs generator processing and reports errors clearly.
+
+Example:
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+### Generator Processing Steps
+
+1. **File Discovery & Parsing: **Walks the input path recursively or uses a single file.
+2. **AST Parsing: **Uses Go's `go/parser` and `go/ast` to extract:
+   - Interfaces and their methods
+   - Struct definitions
+   - Package-level config declarations
+3. **Config Application: **Combines all applicable genconfig.Config instances considering file-level or package-level scopes.
+4. **Interface Filtering: **Applies include/exclude rules, matching patterns and literal types.
+5. **Code Generation: **Calls templates (`internal/gen/template.go`) to emit:
+   - Query interface implementations
+   - Field helper structs representing model fields and associations
+6. **Output Formatting: **Runs `golang.org/x/tools/imports` to fix imports and formatting.
+
+### Template Engine and Generated Code
+
+- **Query Implementations:** Wrap GORM queries with methods that implement your interface.
+- **SQL Template Processing:** Embedded SQL templates from method docs are parsed, parameters bound, and dynamic SQL fragments handled.
+- **Field Helpers:** Provide strongly typed predicates and setters matching model fields—these empower fluent and safe query construction.
+
+Example generated method snippet:
+```go
+func (e QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+  sb := &strings.Builder{}
+  params := []any{id}
+  sb.WriteString("SELECT * FROM @@table WHERE id=@id")
+  return e.Exec(ctx, sb.String(), params...)
+}
+```
+
+---
+
+## Value for Users
+
+- **Transparency:** Understanding component roles lets you customize configs, diagnose issues, and extend workflows.
+- **Confidence:** Know where your input flows in and what the expected output artifacts are.
+- **Efficiency:** Spot how to leverage templates to define rich query interfaces with minimal boilerplate.
+
+---
+
+## Best Practices and Tips
+
+- Ensure your Go interfaces include clear SQL templates in method comments.
+- Use generator configuration package-level files to customize output paths and filtering to keep your codebase clean.
+- Don’t forget to specify the input with `-i` and output directories with `-o` when running the CLI.
+- Review generated code in output to learn how your templates compile into real query implementations.
+- Extend or override field helper mappings via config to handle custom types like JSON fields.
+
+---
+
+## Troubleshooting Common Issues
+
+- If no interfaces or structs appear generated, verify your `genconfig.Config` filters.
+- Errors about method signatures often mean your interface methods are missing error returns or have too many/incorrect return values.
+- Make sure Go source files are parseable and do not include conflicting code.
+- If generation output is sprinkled across unexpected directories, confirm your `OutPath` config settings.
+
+---
+
+## Summary
+
+GORM CLI’s architecture establishes a powerful yet clear pipeline that converts your declarative Go interfaces and models into robust, type-safe database access layers. From running a simple CLI command, through AST parsing and filtering, to template-driven source code generation, each component fulfills a precise role — empowering you to build safe, efficient, and composable query APIs.
+
+---
+
+## Additional Resources
+
+- [Usage Workflow](https://docs.example.com/guides/core-workflows/getting-started)
+- [Writing Query Interfaces](https://docs.example.com/getting-started/first-steps/write-models-interfaces)
+- [Configuring Code Generation](https://docs.example.com/guides/real-world-patterns/configuring-generation)
+- [Template DSL Explanation](https://docs.example.com/guides/real-world-patterns/template-dsl)
+
+For a visual representation of the entire GORM CLI flow within your project, see the companion diagram in the **System Architecture & Workflow** documentation page.
+
+---
+
+*End of Overall System Architecture Guide*
