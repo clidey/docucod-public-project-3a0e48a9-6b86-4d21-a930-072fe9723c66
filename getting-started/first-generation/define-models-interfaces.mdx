@@ -1,0 +1,275 @@
+---
+title: "Define Models & Query Interfaces"
+description: "Walk through creating your first model structs and query interfaces with SQL templates, following best practices to enable robust code generation. This sets the foundation for producing type-safe and ergonomic APIs."
+---
+
+# Define Models & Query Interfaces
+
+Welcome to the foundational step of using GORM CLI: defining your Go model structs and query interfaces with embedded SQL templates. This page guides you through creating clear, well-structured models and expressive query interfaces to unlock the power of type-safe and fluent database access with GORM CLI.
+
+---
+
+## Why Define Models and Query Interfaces?
+
+GORM CLI's core value lies in generating two crucial components:
+
+- **Type-safe query APIs**: Built from your Go interfaces enriched with SQL templates.
+- **Field helpers**: Created from model structs to simplify filters, updates, and association operations.
+
+By writing your model definitions and query interfaces precisely, you enable the generator to produce compile-time safe, readable, and maintainable data access code aligned with your schema and querying needs.
+
+---
+
+## 1. Create Your Model Structs
+
+Your model structs represent database tables using GORM's conventions. Defining them clearly impacts the quality of generated code helpers.
+
+### Best Practices
+
+- Embed `gorm.Model` or define explicit fields like ID, CreatedAt, UpdatedAt for standard model metadata.
+- Declare fields with Go types representing column data (e.g., `string`, `int`, `time.Time`, nullable types).
+- Use GORM struct tags for associations and constraints (e.g., `gorm:"polymorphic:Owner"` or `gorm:"many2many:UserSpeak"`).
+- Use the `gen:"json"` tag to indicate custom JSON field helpers if applicable.
+
+### Real-World Example
+
+```go
+// User model with fields and multiple associations
+// Located in examples/models/user.go
+package models
+
+import (
+  "database/sql"
+  "time"
+  "gorm.io/gorm"
+)
+
+type User struct {
+  gorm.Model
+  Name      string
+  Age       int
+  Birthday  *time.Time
+  Score     sql.NullInt64
+  LastLogin sql.NullTime
+
+  Account   Account            // has one
+  Pets      []*Pet             // has many
+  Toys      []Toy `gorm:"polymorphic:Owner"` // has many polymorphic
+
+  CompanyID *int
+  Company   Company            // belongs to
+
+  ManagerID *uint
+  Manager   *User              // belongs to single-table
+  Team      []User `gorm:"foreignkey:ManagerID"` // has many single-table
+
+  Languages []Language `gorm:"many2many:UserSpeak"`   // many to many
+  Friends   []*User    `gorm:"many2many:user_friends"` // many to many single-table
+
+  Role      string
+  IsAdult   bool   `gorm:"column:is_adult"`
+
+  Profile   string `gen:"json"`  // Custom JSON helper field
+}
+
+// Other related models
+
+type Account struct {
+  gorm.Model
+  UserID       sql.NullInt64
+  Number       string
+  RewardPoints sql.NullInt64
+  LastUsedAt   sql.NullTime
+}
+
+type Pet struct {
+  gorm.Model
+  UserID *uint
+  Name   string
+  Toy    Toy `gorm:"polymorphic:Owner;"`
+}
+
+type Toy struct {
+  gorm.Model
+  Name      string
+  OwnerID   uint
+  OwnerType string
+}
+
+type Company struct {
+  ID   int
+  Name string
+}
+
+type Language struct {
+  Code string `gorm:"primarykey"`
+  Name string
+}
+```
+
+> This example demonstrates multiple relationship types (has one, has many, belongs to, many to many).
+
+
+## 2. Define Query Interfaces with Embedded SQL Templates
+
+Your query interfaces describe the operations that your application will perform against your database, via method declarations paired with inline SQL templates in method comments.
+
+### Why Use SQL Templates?
+
+They allow you to:
+
+- Write expressive, parameterized SQL queries tightly bound to your Go interface methods.
+- Ensure type-safe, generated method implementations matching your declared query signatures.
+- Leverage GORM CLI's powerful custom DSL for conditions and updates.
+
+### Syntax and Template DSL
+
+| Directive   | Purpose                            | Example                                  |
+| ----------- | -------------------------------- | ---------------------------------------- |
+| `@@table`   | Resolves to the model’s table name | `SELECT * FROM @@table WHERE id=@id`    |
+| `@@column`  | Dynamic column binding             | `@@column=@value`                        |
+| `@param`    | Maps Go params to SQL params       | `WHERE name=@user.Name`                  |
+| `{{where}}` | Conditional WHERE clause           | `{{where}} age > 18 {{end}}`             |
+| `{{set}}`   | Conditional SET clause (UPDATE)    | `{{set}} name=@name {{end}}`             |
+| `{{if}}`    | Conditional SQL fragment           | `{{if age > 0}} AND age=@age {{end}}`    |
+| `{{for}}`   | Iteration over a collection        | `{{for _, t := range tags}} ... {{end}}` |
+
+### Example Interface
+
+```go
+// examples/query.go
+package examples
+
+import (
+  "time"
+  "gorm.io/cli/gorm/examples/models"
+)
+
+type Query[T any] interface {
+  // GetByID query data by id and return it as struct
+  //
+  // SELECT * FROM @@table WHERE id=@id AND name = "\@name"
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // SELECT * FROM users
+  //   {{if user.ID > 0}}
+  //       WHERE id=@user.ID
+  //   {{else if user.Name != ""}}
+  //       WHERE name=@user.Name
+  //   {{end}}
+  QueryWith(user models.User) (T, error)
+
+  // UPDATE @@table
+  //  {{set}}
+  //    {{if user.Name != ""}} name=@user.Name, {{end}}
+  //    {{if user.Age > 0}} age=@user.Age, {{end}}
+  //    {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+  //  {{end}}
+  // WHERE id=@id
+  UpdateInfo(user models.User, id int) error
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{for _, user := range users}}
+  //     {{if user.Name != "" && user.Age > 0}}
+  //       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+  //     {{end}}
+  //   {{end}}
+  // {{end}}
+  Filter(users []models.User) ([]T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+
+  // SELECT * FROM @@table
+  //  {{where}}
+  //    {{if !start.IsZero()}}
+  //      created_at > @start
+  //    {{end}}
+  //    {{if !end.IsZero()}}
+  //      AND created_at < @end
+  //    {{end}}
+  //  {{end}}
+  FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+> Notice the direct embedding of parameterized SQL templates in method comments enabling rich query expression.
+
+
+## 3. Practical Tips for Defining Your Models & Queries
+
+- **Keep models lean but descriptive:** Avoid redundant fields. Use GORM tags to clarify database mappings.
+- **Use pointers for nullable fields:** e.g., `*time.Time` or `*int` to signal database NULLs.
+- **Write clear query interfaces matching your application needs:** Design methods to encapsulate common query patterns.
+- **Leverage SQL templates for dynamic queries:** Use `{{if}}`, `{{where}}`, and `{{for}}` for conditional and iterative SQL.
+- **Provide context awareness:** The generator auto-injects `context.Context` if missing for async support.
+- **Avoid incompatible return signatures:** Methods must return either `(T, error)` or `(error)` matching usage expectations.
+
+
+## 4. Understanding Field and Association Helpers Generated
+
+From your declared models, GORM CLI generates:
+
+- **Basic field helpers** (e.g., `generated.User.Name.Eq("alice")`) for predicates and updates.
+- **Association helpers**, typed for related models, supporting operations like Create, Update, Unlink, Delete, CreateInBatch, e.g.,
+  
+```go
+  gorm.G[User](db).
+    Set(
+      generated.User.Name.Set("alice"),
+      generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+    ).
+    Create(ctx)
+```
+
+These helpers ensure type safety and fluent chaining.
+
+
+## 5. How This Page Fits Into Your GORM CLI Journey
+
+By completing your model and query interface definitions with embedded SQL templates as guided here, you set a solid foundation for the next critical step:
+
+- **Running the code generator** to create your type-safe API and helpers.
+
+The upcoming documentation pages will guide you through running the generator, exploring generated code, and integrating it into your projects.
+
+---
+
+## Troubleshooting & Best Practices
+
+<AccordionGroup title="Common Issues & Tips">
+<Accordion title="My SQL templates don't generate expected methods">
+Ensure your method comments have valid SQL template syntax and comply with the DSL directives like `@@table`, `@param`, `{{where}}`, `{{set}}`.
+
+Avoid malformed comment blocks or missing required placeholders.
+</Accordion>
+<Accordion title="Nullable fields and zero values behave unexpectedly">
+Use correct Go types such as `*time.Time` or `sql.Null*` types to represent nullable DB columns. Confirm your field tags and generator mapping for consistency.
+</Accordion>
+<Accordion title="Associations aren't generating helpers as expected">
+Check your GORM association tags (`has one`, `has many`, `belongs to`, `many2many`) for correctness. Ensure related model types are defined and exported.
+</Accordion>
+<Accordion title="Context parameter missing in interface method">
+The generator injects `context.Context` automatically if omitted.
+
+For explicit control, include it as the first parameter.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Additional Resources
+
+- [Quickstart Workflow](/overview/quick-features/quickstart) — Learn how to run the generator and use generated APIs.
+- [Configuration Basics](/getting-started/setup-installation/configuration-basics) — Customize generation behavior.
+- [Field Helper Best Practices](/guides/generation-patterns/field-helper-best-practices) — Deep dive into working with generated helpers.
+
+---
+
+By following this guide, you create a robust foundation for leveraging GORM CLI to produce powerful, typesafe, and maintainable database querying APIs.
+
+Happy coding!
