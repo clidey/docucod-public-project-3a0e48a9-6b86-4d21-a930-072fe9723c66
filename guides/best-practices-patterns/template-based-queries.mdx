@@ -1,0 +1,252 @@
+---
+title: "Writing Template-Based Queries"
+description: "Explains how to use SQL templates in interface method comments to express custom queries with the template DSL. Offers best practices, syntax reference, and examples for conditional and dynamic SQL generation."
+---
+
+# Writing Template-Based Queries
+
+This guide explains how to use SQL templates within your Go interface method comments to define powerful, flexible queries using GORM CLI's template DSL. By embedding dynamic SQL directly in your interface methods, you gain type-safe, customizable query methods that integrate seamlessly with your models.
+
+---
+
+## 1. Overview
+
+The `Writing Template-Based Queries` page teaches you how to write SQL templates in interface comments to express custom querying logic. It covers the syntax, directives, and best practices for conditional, dynamic, and iterative SQL generation.
+
+### What this guide helps you accomplish
+- Write expressive, flexible SQL queries using templates
+- Embed dynamic SQL directly in Go interface methods
+- Leverage placeholders, conditionals, loops, and custom expressions
+- Use the template DSL to create type-safe, generated query APIs
+
+### Prerequisites
+- Familiarity with Go interfaces and method comments
+- Basic understanding of GORM and your data models
+- Installed and configured GORM CLI with working generation
+
+### Expected outcome
+- Confidently author SQL templates in comments
+- Generate query APIs that support complex filtering and updates
+- Understand template syntax and common directives
+
+### Time estimate
+~15-30 minutes to grasp key concepts and write your first templates
+
+### Difficulty level
+Intermediate — requires knowledge of SQL, Go, and templating concepts
+
+---
+
+## 2. Template-Based Query Syntax and Concepts
+
+GORM CLI uses a simple but powerful SQL template DSL embedded in method comments. This lets you define queries with parameter binding, conditional logic, and iteration—all compiled into type-safe Go code.
+
+### Key Features
+- **Placeholders**: Bind Go variables automatically
+- **Directives**: `{{where}}`, `{{set}}`, `{{if}}`, `{{else}}`, `{{for}}`, and `{{end}}`
+- **Dynamic Columns and Tables**: Use `@@table` and `@@column` for flexible schema references
+- **SQL Fragments**: Use comments to write full or partial SQL with embedded Go expressions
+
+### Placeholders Explained
+| Placeholder | Description | Example |
+| ----------- | ----------- | ------- |
+| `@@table`   | Resolves to the table name of the model | `SELECT * FROM @@table WHERE id=@id` |
+| `@@column`  | Dynamic column name binding | `WHERE @@column=@value` |
+| `@param`    | Maps Go method params to SQL parameters | `WHERE name=@user.Name` |
+
+### Conditional Clauses
+Directives control optional SQL parts based on Go values:
+
+```sql
+{{where}}
+  {{if user.Age > 0}}
+    age > @user.Age
+  {{end}}
+{{end}}
+```
+
+- `{{where}}` and `{{set}}` aggregate SQL fragments, trimming dangling operators.
+- `{{if}}` and `{{else}}` add branches in the SQL based on conditions.
+- Use `{{for}}` to iterate over slices or arrays, generating repeated conditions.
+
+### Example of a full template method comment
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{if user.Name != ""}} name=@user.Name {{end}}
+//   {{if user.Age > 0}} AND age > @user.Age {{end}}
+// {{end}}
+SearchUsers(user User) ([]T, error)
+```
+
+---
+
+## 3. Writing Effective Template Queries: Step-by-Step
+
+### Step 1: Define your interface with SQL templates
+Write Go interface methods with SQL in comments above them using the DSL.
+
+```go
+// Query interface defined in your project
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{if startDate != nil}} created_at > @startDate {{end}}
+  //   {{if endDate != nil}} AND created_at < @endDate {{end}}
+  // {{end}}
+  FindByDateRange(startDate, endDate *time.Time) ([]T, error)
+}
+```
+
+### Step 2: Bind Go method parameters
+Use `@param` placeholders to map method parameters into SQL safely.
+
+- Parameters can be structs or primitive types
+- Use dot notation for struct fields: `@user.Name`
+
+### Step 3: Use `{{where}}` and `{{set}}` blocks
+- `{{where}}` generates conditional WHERE clauses
+- `{{set}}` generates SET clauses for UPDATE statements
+
+These blocks automatically trim extra AND/OR or commas.
+
+### Step 4: Incorporate conditionals with `{{if}}` and `{{else}}`
+Enclose optional SQL fragments with `{{if condition}} ... {{else}} ... {{end}}`.
+
+```sql
+{{where}}
+  {{if user.IsActive}}
+    status='active'
+  {{else}}
+    status='inactive'
+  {{end}}
+{{end}}
+```
+
+### Step 5: Use `{{for}}` to iterate over collections
+Example: generate multiple OR conditions for an array of users
+
+```sql
+{{where}}
+  {{for _, u := range users}}
+    {{if u.Name != ""}} name = @u.Name OR {{end}}
+  {{end}}
+{{end}}
+```
+
+### Step 6: Run the GORM CLI generator
+Execute your generation command pointing at the interface file.
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+### Step 7: Use the generated type-safe APIs in your app
+Call the generated methods with your context and params. Example:
+
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+if err != nil {
+  log.Fatal(err)
+}
+```
+
+---
+
+## 4. Best Practices and Tips
+
+- **Keep SQL readable:** Use indentation and comments inside your method documentation to improve clarity.
+- **Validate placeholders:** Ensure placeholders correspond exactly to your Go method parameters.
+- **Use `@@table` and `@@column` for flexible SQL:** They let your method adapt if table/column names change.
+- **Trim dangling connectors:** `{{where}}` and `{{set}}` will clean extra AND/OR or commas, so partial SQL snippets are safe.
+- **Avoid complex logic in templates:** Keep complex filtering logic inside your Go code; templates are for query structure.
+- **Use batch iteration carefully:** `{{for}}` is powerful but avoid generating very large SQL.
+
+---
+
+## 5. Common Template Examples
+
+### Basic Select with parameter binding
+```go
+// SELECT * FROM @@table WHERE name=@name
+FindByName(name string) (T, error)
+```
+
+### Conditional WHERE with age filter
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{if age > 0}} age > @age {{end}}
+// {{end}}
+FindByAge(age int) ([]T, error)
+```
+
+### Update with dynamic SET fields
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+
+### Iterating over filters
+```go
+// SELECT * FROM @@table
+// {{where}}
+//  {{for _, u := range users}}
+//    {{if u.Age > 0}} age=@u.Age OR {{end}}
+//  {{end}}
+// {{end}}
+FilterUsers(users []User) ([]T, error)
+```
+
+---
+
+## 6. Troubleshooting and Common Issues
+
+### Template parsing errors
+- Ensure all `{{...}}` directives have matching `{{end}}`
+- No unescaped `@` characters (use `\@` to escape)
+
+### Missing parameters
+- Every `@param` must correspond to a method parameter
+- Use full names for struct params, e.g., `@user.Name`
+
+### Untrimmed operators
+- Use `{{where}}` and `{{set}}` to ensure trimming of leading/trailing AND, OR, commas
+
+### Complex conditions not supported
+- Avoid embedding very complex Go logic; precompute in Go, pass results to the template
+
+<br>
+
+## 7. Next Steps and Related Content
+
+- Explore the [Working With Basic Fields](https://docs.gorm.io/guides/best-practices-patterns/working-with-basic-fields) guide to apply field helpers with generated APIs.
+- Advance to [Working With Associations](https://docs.gorm.io/guides/best-practices-patterns/associations-and-relations) for managing relations.
+- Deep dive into [Customizing Generation Config](https://docs.gorm.io/guides/core-workflows/customizing-generation-config) to control code output.
+- For hands-on examples, see the [examples/query.go](https://github.com/go-gorm/cli/blob/main/examples/query.go) interface file.
+
+---
+
+# Appendix: Template DSL Reference
+
+| Directive  | Purpose                                         | Usage Example
+|------------|------------------------------------------------|-----------------------------
+| `@@table`  | Inserts the current model's table name          | `SELECT * FROM @@table`
+| `@@column` | Dynamic column name insertion                    | `WHERE @@column=@value`
+| `@param`   | Bind Go method parameter as SQL parameter       | `WHERE name=@user.Name`
+| `{{where}}`| Wraps conditional WHERE clauses; trims AND/OR  | See section 2
+| `{{set}}`  | Wraps UPDATE SET clauses; trims commas          | See section 3
+| `{{if}}`   | Conditional SQL inclusion                        | `{{if condition}} ... {{end}}`
+| `{{else}}` | Branch within an if statement                    | `{{if cond}} ... {{else}} ... {{end}}`
+| `{{for}}`  | Loop over slice/map to render repeated SQL parts| `{{for _, v := range vals}} ... {{end}}`
+| `{{end}}`  | Ends conditional or loop blocks                  | Always required
+
+---
