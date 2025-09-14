@@ -1,0 +1,313 @@
+---
+title: "Configuration Setup"
+description: "Establish and customize your code generation environment by utilizing the optional `genconfig.Config`. Learn where and how to declare configuration files, override defaults, and map types or fields according to your project’s needs."
+---
+
+# Configuration Setup
+
+Customize and control the behavior of GORM CLI's code generation by using the optional `genconfig.Config` configuration. This page guides you through the process of declaring, overriding, and tailoring generation settings per package or file to fit your project’s specific requirements.
+
+---
+
+## 1. Purpose of Configuration
+
+GORM CLI works with zero configuration by default, generating type-safe query APIs and model field helpers from all supported interfaces and structs it discovers in the input directory or package. However, to **fine-tune generation**, you can provide a `genconfig.Config` in your package. This lets you:
+
+- Override output directories (`OutPath`) for generated files
+- Map Go field types or struct tags to custom field helpers
+- Control inclusion/exclusion of specific interfaces or structs
+- Limit configuration scope to a single file (`FileLevel`)
+
+
+### When to Use Configuration
+
+- Your project structure requires different output paths per package
+- You want to replace how certain fields (e.g., time, JSON) are handled
+- You wish to generate only a subset of interfaces or structs (whitelisting/blacklisting)
+- You have complex filtering rules to avoid generating deprecated or experimental interfaces
+
+
+---
+
+## 2. Declaring a Configuration File
+
+To apply configuration, declare a package-level variable of type `genconfig.Config` in any Go source file in the package you want to customize. The GORM CLI generator automatically detects and applies this.
+
+```go
+package yourpackage
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "generated/output", // Custom output path
+
+    // Map Go types to specific field helpers (example: sql.NullTime to Time field helper)
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+
+    // Map struct tag names to field helpers (e.g., `gen:"json"`)
+    FieldNameMap: map[string]any{
+        "json": JSON{},
+    },
+
+    // Limit generation only to interfaces matching "Query*" pattern
+    IncludeInterfaces: []any{"Query*"},
+
+    // Exclude deprecated interfaces by pattern
+    ExcludeInterfaces: []any{"*Deprecated*"},
+
+    // Generate only structs matching explicit patterns or literals
+    IncludeStructs: []any{"User", "Account*"},
+
+    // Exclude DTO or temporary structs
+    ExcludeStructs: []any{"*DTO"},
+
+    // Apply configuration only to this file (no subdirectories)
+    FileLevel: false,
+}
+```
+
+### Important Notes
+
+- Use **typed instances** as map keys and values in `FieldTypeMap` and `FieldNameMap` to allow the generator to identify import paths and methods correctly.
+- Patterns in `IncludeInterfaces`, `ExcludeInterfaces`, `IncludeStructs`, and `ExcludeStructs` support shell-style wildcards, e.g., `Query*`, `Account*`, `*DTO`.
+- You may also specify exact types by providing type literals such as `models.User{}` or conversions like `models.Query(nil)`.
+- Whitelisting (`Include*`) takes precedence over blacklisting (`Exclude*`). If `Include*` is set, only matching items are generated.
+
+---
+
+## 3. Configuration Fields Explained
+
+| Field               | Description                                                         | Usage Example
+|---------------------|---------------------------------------------------------------------|--------------------
+| **OutPath**          | Override the output directory for generated files in this package. | `OutPath: "generated/output"`
+| **FieldTypeMap**     | Map Go native types to custom field helpers.                        | `map[any]any{sql.NullTime{}: field.Time{}}`
+| **FieldNameMap**     | Map struct tag names (`gen:"tag"`) to field helpers.              | `map[string]any{"json": JSON{}}`
+| **IncludeInterfaces**| Whitelist interfaces for generation by patterns or types.          | `[]any{"Query*", models.Query(nil)}`
+| **ExcludeInterfaces**| Blacklist interfaces after whitelist filtering.                     | `[]any{"*Deprecated*"}`
+| **IncludeStructs**   | Whitelist struct types similar to interfaces filters.               | `[]any{"User", models.User{}}`
+| **ExcludeStructs**   | Blacklist struct types.                                              | `[]any{"*DTO"}`
+| **FileLevel**        | When true, applies config only to the current file, not package.   | `FileLevel: true`
+
+---
+
+## 4. Mapping Field Types and Tags
+
+The generator uses field type and tag mappings to decide which helpers to generate, impacting predicates, updates, and association helpers.
+
+### FieldTypeMap
+
+Use `FieldTypeMap` to replace default handlers for specific Go types, for example turning `sql.NullTime` fields into the more expressive `field.Time` helper.
+
+```go
+FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+},
+```
+
+### FieldNameMap
+
+Map struct field names decorated with a given `gen:"tag"` to a specific helper type to customize treatment per-column.
+
+Example to support a JSON helper for fields tagged with `gen:"json"`:
+
+```go
+FieldNameMap: map[string]any{
+    "json": JSON{},
+},
+```
+
+This requires you to define the custom helper (`JSON` in this case) in your project.
+
+### Example custom JSON helper usage:
+```go
+// In your model:
+Profile string `gen:"json"`
+
+// Your helper implements custom SQL generation depending on the database.
+```
+
+---
+
+## 5. Fine-Grained Inclusion and Exclusion
+
+To limit code generation to relevant interfaces or structs:
+
+- **IncludeInterfaces/Structs**: Only generate matching patterns/types
+- **ExcludeInterfaces/Structs**: Skip these after inclusion filtering
+
+Example:
+
+```go
+IncludeInterfaces: []any{"Query*"},       // Only interfaces starting with "Query"
+ExcludeInterfaces: []any{"*Deprecated*"}, // Exclude deprecated interfaces
+
+IncludeStructs: []any{"User", "Account*"},
+ExcludeStructs: []any{"*DTO"},
+```
+
+### Pattern Rules:
+- Shell-style wildcard matching (`*`, `?`)
+- Qualified names like `models.User` or unqualified `User`
+- Type literals for explicit control
+
+This lets you selectively generate code where large packages or legacy code exist.
+
+---
+
+## 6. File-Level vs Package-Level Configuration
+
+By default (`FileLevel: false`), configuration applies to the whole package directory, including all its files and subdirectories.
+
+Setting `FileLevel: true` restricts the config to the specific file where it's declared:
+
+```go
+FileLevel: true,
+```
+
+Use this when you want different configs per file within the same package.
+
+---
+
+## 7. Example Configurations
+
+### Basic Output Override and Field Mapping
+
+```go
+package examples
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "examples/generated",
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+    FieldNameMap: map[string]any{
+        "json": JSON{},
+    },
+}
+```
+
+### Whitelist Interfaces and Structs
+
+```go
+package filters
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+    IncludeInterfaces: []any{"Query*"},
+    IncludeStructs:    []any{"User", "Account*"},
+}
+```
+
+### Blacklist Nested Interfaces
+
+```go
+package nested
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+    ExcludeInterfaces: []any{"I3"},
+    ExcludeStructs:    []any{"S3"},
+}
+```
+
+---
+
+## 8. Applying the Configuration
+
+Once declared in the package, **no CLI flags are needed** to apply these settings. Simply running the generator (`gorm gen`) over your package or directory picks up all `genconfig.Config` declarations and merges settings.
+
+The generator deduplicates and merges multiple configs when found in the scanned files, applying filters and overrides accordingly.
+
+---
+
+## 9. Troubleshooting Configuration
+
+<AccordionGroup title="Common Configuration Issues and Solutions">
+<Accordion title="Config Not Applied - Outputs Still Default">
+- Ensure your config variable is a **package-level variable** and is **assigned to an anonymous variable `_`**.
+- Confirm the package import path for `genconfig` is correct.
+- Check that your config file is included in the source directory passed to the generator.
+- Verify no syntax errors or build failures in the config file.
+</Accordion>
+
+<Accordion title="FieldTypeMap or FieldNameMap Not Working as Expected">
+- Confirm you use **typed instances** as keys and values, e.g., `sql.NullTime{}` not just strings.
+- Make sure your custom helpers are imported and recognized.
+- Double-check whether the config file’s `FileLevel` is not limiting application unexpectedly.
+</Accordion>
+
+<Accordion title="Interfaces or Structs Filtering Not Working">
+- Validate pattern syntax for shell-style wildcards.
+- Check if your filters conflict or whitelist excludes everything.
+- Include and exclude rules are processed in order, remember whitelist takes precedence.
+</Accordion>
+
+</AccordionGroup>
+
+---
+
+## 10. Next Steps
+
+- After configuring your project, proceed to [Defining Models & Query Interfaces](/getting-started/your-first-code-generation/defining-models-interfaces) to write the input code.
+- Use [Generating Code](/getting-started/your-first-code-generation/generating-code) to run the generation with your custom settings.
+- Refer to [Using the Generated APIs in Your Application](/guides/core-workflows/using-generated-apis) to consume the generated code effectively.
+
+
+---
+
+## 11. Additional Resources
+
+- [What is GORM CLI?](/overview/product-intro-and-value/what-is-gorm-cli) - Understand the purpose of GORM CLI.
+- [Value Proposition & Key Benefits](/overview/product-intro-and-value/value-proposition) - Learn why configuration enhances your workflow.
+- [Configurable Generation](/gorm-cli-concepts/configuration-and-integration/generation-configuration) - Deep dive into configuration concepts.
+- [Troubleshooting Common Issues](/getting-started/troubleshooting-and-faq/common-issues) - For resolving generation problems.
+
+
+---
+
+## Summary Example for Your Config File
+
+```go
+package yourpackage
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "generated",
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+    FieldNameMap: map[string]any{
+        "json": JSON{},
+    },
+    IncludeInterfaces: []any{"Query*"},
+    ExcludeStructs: []any{"*DTO"},
+}
+```
+
+
+---
+
+With this setup, you control every key aspect of how GORM CLI generates typesafe query APIs and field helpers tailored to your project’s unique structure and data handling needs.
+
+<Check>
+You are now ready to configure GORM CLI generation to precisely fit your Go project structure and custom field needs.
+</Check>
