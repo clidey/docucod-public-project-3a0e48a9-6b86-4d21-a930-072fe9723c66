@@ -1,0 +1,268 @@
+---
+title: "Model-Driven Field Helpers in Action"
+description: "Discover how to use GORM CLI to create strongly typed field helpers for filters, updates, and associations from your model structs. Includes common usage patterns and real code snippets to supercharge your workflow."
+---
+
+# Model-Driven Field Helpers in Action
+
+Discover how GORM CLI generates strongly typed field helpers directly from your Go model structs. These helpers let you create fluent, type-safe filters, updates, and association operations, eliminating boilerplate and preventing runtime errors.
+
+---
+
+## 1. Overview
+
+### What This Page Covers
+This guide shows you how to leverage GORM CLI's model-driven field helpers to write safer and more expressive database queries and mutations. You'll learn how the CLI parses your model structs and generates ready-to-use field helpers for basic column operations and complex associations.
+
+### Prerequisites
+- You have Go models defined in your project.
+- GORM CLI is installed and configured.
+- You have a basic understanding of GORM ORM and Go generics.
+
+### Expected Outcome
+After following this guide, you will:
+- Understand how to use generated field helpers for filtering and updating.
+- Know how to perform association operations in a type-safe manner.
+- Be able to apply common patterns and prevent typical mistakes.
+
+### Time Estimate
+Approximately 15–30 minutes to read through and experiment with examples.
+
+### Difficulty Level
+Intermediate (familiarity with GORM and Go generics recommended).
+
+---
+
+## 2. Understanding Model-Driven Field Helpers
+
+### Why Field Helpers?
+Writing SQL filters and update statements manually involves crafting string queries prone to errors. GORM CLI generates typed helpers from your model fields, allowing you to build queries fluently with compile-time safety. This reduces bugs and boosts productivity.
+
+### How Helpers Are Generated
+From your Go model structs, GORM CLI analyzes each field and generates corresponding helper types:
+
+- **Basic Fields:** For primitive data types like `int`, `string`, `time.Time`, etc., you get helpers such as `field.String`, `field.Number[int]`, `field.Time`, providing predicates like `.Eq()`, `.Like()`, `.Between()`, setters like `.Set()`, and incrementers like `.Incr()`.
+- **Named Type Overrides:** You can map custom types (or field tag names) to specific field helper wrappers using generator configuration.
+- **Associations:** Relationship fields generate specialized helpers, such as `field.Struct[T]` for single associations and `field.Slice[T]` for collections, supporting create, update, unlink, delete, and batch operations.
+
+These helpers appear as variables named after your model struct, exposing all fields for direct use.
+
+---
+
+## 3. Using Field Helpers for Basic Fields
+
+Assume this example user model:
+
+```go
+package models
+
+type User struct {
+    ID        uint
+    Name      string
+    Email     string
+    Age       int
+    Status    string
+    CreatedAt time.Time
+}
+```
+
+After generation, you can access fields like `generated.User.Name`, `generated.User.Age`, each with rich methods.
+
+### Common Predicate Methods
+- `.Eq(value)`: equality check, e.g. `generated.User.Name.Eq("alice")` becomes `name = 'alice'`
+- `.Like(pattern)`: SQL LIKE pattern match, e.g. `.Like("%jinzhu%")`
+- `.Between(min, max)`: range checks for numbers/dates
+- `.IsNull()`: SQL IS NULL check
+
+### Example: Filtering Users by Age Range
+```go
+import (
+  "gorm.io/gorm"
+  "your_project/generated"
+  "context"
+)
+
+func GetAdultUsers(db *gorm.DB, ctx context.Context) ([]models.User, error) {
+  return gorm.G[models.User](db).
+    Where(generated.User.Age.Between(18, 65)).
+    Find(ctx)
+}
+```
+
+### Example: Updating Fields Safely
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(123)).
+  Set(
+    generated.User.Name.Set("jinzhu"),
+    generated.User.Status.Set("active"),
+    generated.User.Age.Incr(1),
+  ).
+  Update(ctx)
+```
+
+### Tips
+- When fields have nullable types like `sql.NullTime`, map them via the `FieldTypeMap` to specialized helpers like `field.Time{}` in your configuration.
+- Use `.SetExpr()` for complex expressions.
+
+---
+
+## 4. Working With Associations
+
+GORM CLI generates **association field helpers** to manage linked models with compile-time safety.
+
+### Types of Association Helpers
+- **field.Struct[T]**: Used for `has one` or `belongs to` relations (single associated record).
+- **field.Slice[T]**: Used for `has many` or `many to many` relations (collections).
+
+### Supported Operations
+Each association helper supports these operations which you can compose inside `Set()` calls:
+
+| Operation   | Description                                   | Use Case Example                             |
+|-------------|-----------------------------------------------|----------------------------------------------|
+| `Create()`  | Create and link a new associated record       | Create a user’s pet alongside the user       |
+| `CreateInBatch()` | Batch create and link multiple associated records | Add multiple languages to a user            |
+| `Update()`  | Update associated records conditionally       | Change a pet’s name where specific criteria  |
+| `Unlink()`  | Remove association link without deleting      | Remove pet ownership link but keep pet record|
+| `Delete()`  | Delete associated records or join rows        | Delete old language associations              |
+| `Where()`   | Add filters before other operations            | Update only pets named "fido"               |
+
+### Example: Creating a User and a Pet
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+### Example: Updating Associated Records Conditionally
+```go
+// Rename pet "fido" to "rex" for user with ID 1
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+```
+
+### Example: Unlink and Delete Associations
+```go
+// Unlink all pets without deleting
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Unlink(),
+  ).
+  Update(ctx)
+
+// Delete all pets where name="old"
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete(),
+  ).
+  Update(ctx)
+```
+
+### Semantics by Association Type
+- **`belongs to`**: `Unlink()` clears parent foreign key (set NULL); `Delete()` deletes the target row.
+- **`has one` / `has many`**: `Unlink()` clears child FK; `Delete()` removes child rows.
+- **`many2many`**: `Unlink()` and `Delete()` remove join table rows only; associated entities remain.
+
+### Tips
+- Compose operations carefully inside `Set()` calls to batch changes efficiently.
+- Use `Where()` on association helpers to restrict which associated records are affected.
+
+---
+
+## 5. Configuring Field Helpers
+
+GORM CLI allows customization via `genconfig.Config` where you can override field helper mappings.
+
+### Mapping Custom Types or Tags
+Insert a `genconfig.Config` variable in your package with mappings:
+
+```go
+var _ = genconfig.Config{
+  OutPath: "examples/output",
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+  },
+  FieldNameMap: map[string]any{
+    "date": field.Time{},
+    "json": JSON{},  // Use your custom JSON field helper
+  },
+}
+```
+
+This ensures fields with specific Go types or struct tags get appropriate helpers.
+
+### Using Custom Helpers
+To use custom helpers like the `JSON` example:
+- Define your helper type with methods and column binding.
+- Use the helper in queries, benefiting from database-specific SQL generation.
+
+---
+
+## 6. Common Pitfalls & Troubleshooting
+
+### Common Issues
+- **Generated helpers not found in imports:** Ensure you run `gorm gen` with the correct `-o` parameter matching your import paths.
+- **Fields missing helpers:** Check if field types are appropriately mapped in `FieldTypeMap` or `FieldNameMap`.
+- **Association operations fail:** Verify association relationships in your GORM models are set correctly and reflected in generated helpers.
+- **Tags not recognized:** Make sure your struct tags use the exact label configured (e.g., `gen:"json"`).
+
+### Best Practices
+- Define configuration early to map custom field types or tags.
+- Use the generated field helpers instead of raw SQL fragments whenever possible.
+- Test association operations on a smaller dataset before large batch updates.
+
+---
+
+## 7. Next Steps & Related Content
+
+- Explore **[Building Query APIs from Interfaces](/guides/core-workflows/query-api-guide)** to combine field helpers with SQL template methods.
+- Review **[Configuring Your Project](/getting-started/setup-basics/configuration-intro)** to fine-tune generation.
+- See **[Working with Associations: Patterns and Pitfalls](/guides/real-world-patterns/advanced-associations)** for deeper association management.
+- Consult **[Testing and Using Generated Code](/getting-started/first-steps/validate-usage)** for practical application.
+
+---
+
+## Appendix: Example Code Snippets
+
+```go
+// Using Basic Field Helpers for Queries
+users, err := gorm.G[models.User](db).
+  Where(
+    generated.User.Name.Like("%jinzhu%"),
+    generated.User.Age.Between(18, 65),
+  ).
+  Find(ctx)
+
+// Using Association Helpers to Create Related Records
+err = gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Updating Associated Entities Conditionally
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+```
+
+---
+
+Embrace model-driven field helpers to write safer, clearer, and more maintainable database code in your GORM-powered Go projects. Leverage the power of compile-time safety and fluent APIs generated automatically from your models.
+
+
+
