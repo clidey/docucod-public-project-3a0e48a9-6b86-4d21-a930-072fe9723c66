@@ -1,0 +1,181 @@
+---
+title: "Core Concepts and Terminology"
+description: "Explains foundational concepts such as model-driven field helpers, interface-driven query APIs, associations, predicates, field helpers, and SQL template DSL. Establishes a shared language and mental model for all further documentation."
+---
+
+# Core Concepts and Terminology
+
+Understanding GORM CLI’s foundational concepts is key to leveraging its powerful code generation features. This page introduces essential terminology and mechanisms such as model-driven field helpers, interface-driven query APIs, associations, predicates, field helpers, and the SQL template DSL. Establishing this shared vocabulary will empower you to navigate the rest of the documentation with clarity, enabling fluent use and customization of the tool.
+
+---
+
+## Model-Driven Field Helpers
+
+At the heart of GORM CLI’s generation are *field helpers* derived automatically from your Go model structs. These compile-time typed helpers make filtering, updating, and composing queries concise, safe, and discoverable.
+
+- **What they do:** Generate strongly typed expressions for basic fields (strings, ints, bools, times, custom types implementing Scanner/Valuer) and associations (has one, has many, belongs to, many-to-many).
+- **Why it matters:** Instead of manually writing raw SQL or error-prone strings, you write fluent Go code like `generated.User.Name.Like("%jinzhu%")`, confident in compile-time validation.
+
+Example:
+```go
+// For a basic string field
+generated.User.Name.Eq("Alice")    // WHERE name = 'Alice'
+
+// For an association (has many pets)
+generated.User.Pets.Create(generated.Pet.Name.Set("Fido"))  // Create and link
+```
+
+Field helpers also provide flexible operations to create, update, unlink, or delete records in associated tables, handling foreign keys and join tables seamlessly.
+
+---
+
+## Interface-Driven Query APIs
+
+GORM CLI generates concrete implementations from your Go interfaces decorated with SQL template comments. These interfaces define methods like `GetByID(id int) (User, error)` with embedded SQL templates that become type-safe, live query methods.
+
+- **Core purpose:** To give you compile-time safe, auto-implemented query methods that match your SQL templates exactly.
+- **How it works:** You write Go interfaces with methods and annotate them using embedded SQL or template DSL in comments. The generator parses these, including parameters and return types, and emits corresponding implementations.
+
+Example:
+```go
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+}
+
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+```
+
+The generator handles adding `context.Context` automatically if missing and safely binds parameters.
+
+---
+
+## Associations
+
+Associations connect your models via database relationships, and GORM CLI elevates this concept into your generated code with first-class support:
+
+- **Types supported:** `has one`, `has many`, `belongs to`, `many2many`, including *polymorphic* associations.
+- **Generated helpers:** Associations appear as `field.Struct[T]` (for single objects) or `field.Slice[T]` (for collections).
+- **Operations supported:**
+  - `Create` / `CreateInBatch` to insert and link related records
+  - `Update` to modify associated entries
+  - `Unlink` to clear foreign keys or remove join rows without deleting
+  - `Delete` to remove associated records or join table rows
+
+This approach transforms complex association management into fluent, safe Go code:
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Pets.Create(generated.Pet.Name.Set("Rex")),
+  ).
+  Create(ctx)
+```
+
+Underlying semantics respect association types, e.g., `belongs to` unlinks by nulling parent foreign keys, while `many2many` manages join tables transparently.
+
+---
+
+## Predicates and Field Helpers
+
+Field helpers expose methods to build SQL predicates and setters as expressive Go expressions:
+
+- **Predicates:** Build WHERE-like conditions using methods like `Eq()`, `Like()`, `Between()`, `IsNull()`, etc.
+- **Setters:** Create update commands with `Set()`, `Incr()`, or raw expressions using `SetExpr()`.
+
+This lets you write:
+```go
+// Filter users where age is between 18 and 30
+gorm.G[User](db).
+  Where(generated.User.Age.Between(18, 30)).
+  Find(ctx)
+
+// Increment score
+gorm.G[User](db).
+  Set(generated.User.Score.Incr(10)).
+  Update(ctx)
+```
+
+These helpers integrate tightly with GORM’s SQL builder, avoiding injection risks while maintaining readability.
+
+---
+
+## SQL Template DSL
+
+GORM CLI’s query interfaces embed a powerful SQL template DSL that increases expressiveness and safety beyond plain SQL:
+
+| Directive   | Purpose                                 | Example
+| ----------- | -------------------------------------- | -----------------------------
+| `@@table`   | Resolves to the model’s underlying table name | `SELECT * FROM @@table WHERE id=@id`
+| `@@column`  | Dynamically bind column names           | `SELECT * FROM @@table WHERE @@column=@value`
+| `@param`    | Bind Go method parameters safely        | `WHERE name=@user.Name`
+| `{{where}}` | Inject conditional WHERE clauses         | `{{where}} age > 18 {{end}}`
+| `{{set}}`   | Create conditional UPDATE SET clauses   | `{{set}} name=@name {{end}}`
+| `{{if}}`    | Conditional SQL fragments               | `{{if age > 0}} AND age=@age {{end}}`
+| `{{for}}`   | Iterate collections within the query    | `{{for _, tag := range tags}} ... {{end}}`
+
+This DSL lets you write flexible, dynamic SQL right inside Go interface comments, with parameter binding handled automatically.
+
+Example:
+```sql
+// SELECT * FROM @@table
+// {{where}}
+//   {{if user.Name != ""}} name=@user.Name {{end}}
+//   {{if user.Age > 0}} AND age=@user.Age {{end}}
+// {{end}}
+FilterUsers(user User) ([]T, error)
+```
+
+This generates a query including only the non-empty name and positive age conditions.
+
+---
+
+## Why These Concepts Matter
+
+Together, these concepts deliver a development experience that blends flexibility, safety, and productivity:
+
+- Prevent runtime SQL errors with compile-time checked, typed APIs.
+- Speed development by reducing hand-written boilerplate SQL.
+- Improve readability through fluent, expressive Go code.
+- Seamlessly manage complex data relationships inline without manual foreign key handling.
+
+Mastering these core concepts arms you to confidently generate and interact with your database using idiomatic, type-safe Go code.
+
+---
+
+## Next Steps
+
+- Explore [What is GORM CLI?](../product-intro-concepts/what-is-gorm-cli) to understand product goals.
+- Dive into [Generating & Using Type-Safe Query APIs](../../guides/core-workflows/generating-and-using-query-apis) for practical interface-based query patterns.
+- Review [Model-Driven Field Helper Generation](../../guides/core-workflows/model-driven-field-helpers) to maximize your use of field helpers.
+- When ready, see [Working with Associations & Relationships](../../guides/advanced-patterns/working-with-associations) to master relational data handling.
+
+---
+
+## References & Examples
+
+For concrete examples of these concepts, check:
+
+- Example Query Interface ([examples/query.go](https://github.com/go-gorm/cli/blob/main/examples/query.go))
+- Example Model Structs ([examples/models/user.go](https://github.com/go-gorm/cli/blob/main/examples/models/user.go))
+- Generated Model Field Helpers ([examples/output/models/user.go](https://github.com/go-gorm/cli/blob/main/examples/output/models/user.go))
+
+These illustrate the transformation from Go types and interfaces into the generated helper APIs.
+
+
+---
+
+<CardGroup cols={3}>
+<Card title="Model-Driven Field Helpers">
+Provide strongly typed accessors for fields and associations enabling safe query construction and updates.
+</Card>
+<Card title="Interface-Driven Query APIs">
+Write interfaces with SQL templates to generate type-safe query methods.
+</Card>
+<Card title="SQL Template DSL">
+Use directives and conditionals in interface comments to flexibly define queries.
+</Card>
+</CardGroup>
+
+
+

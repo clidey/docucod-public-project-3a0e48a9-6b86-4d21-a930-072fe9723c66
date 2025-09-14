@@ -1,0 +1,300 @@
+---
+title: "Using the Generated APIs"
+description: "Validate your setup by integrating generated query and model helpers into real Go code. Step through simple queries and updates, and confirm correct database access with end-to-end examples. Concrete usage reinforces a successful start and builds user confidence in the tool's value."
+---
+
+# Using the Generated APIs
+
+Validate your setup by integrating generated query and model helpers into real Go code. Step through simple queries and updates, and confirm correct database access with end-to-end examples. This practical guide ensures you gain confidence in using GORM CLI's generated type-safe APIs effectively.
+
+---
+
+## 1. Prerequisites
+
+Before you start:
+
+- Ensure you have run the generator (`gorm gen`) to produce query interfaces and model field helpers.
+- Have a valid `*gorm.DB` database connection ready for use.
+- Understand the relationship between your Go interfaces and the generated concrete types.
+
+If you need help, see [Running the Generator](/getting-started/first-run-and-validation/generating-code).
+
+---
+
+## 2. Importing Generated Code
+
+Import your generated package and your models as usual. For example:
+
+```go
+import (
+  "context"
+  "gorm.io/gorm"
+  "your_project/generated"  // adjust this path
+  "your_project/models"     // your model structs
+)
+```
+
+This setup ensures access to both your model structs and the generated query APIs.
+
+---
+
+## 3. Basic Query Operations
+
+### 3.1. Using Generated Query Interfaces
+
+Each query interface you defined (e.g., `Query`) results in a generated function and concrete struct you can instantiate.
+
+Use the generated constructor passing your `*gorm.DB`:
+
+```go
+ctx := context.Background()
+
+// Instantiate generated query for User
+query := generated.Query[models.User](db)
+```
+
+You now have a type-safe interface with methods matching your SQL templates.
+
+### 3.2. Retrieve a Record by Primary Key
+
+If your interface defines a method like:
+
+```go
+// SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (User, error)
+```
+
+Use it as:
+
+```go
+user, err := query.GetByID(ctx, 123)
+if err != nil {
+  // Handle not found or DB error
+  panic(err)
+}
+fmt.Printf("Found user: %+v\n", user)
+```
+
+This triggers the generated SQL with type safety and correct parameter binding.
+
+### 3.3. Filtering by Multiple Fields
+
+Example: Filtering by name and age using a method such as:
+
+```go
+// where("name=@name AND age=@age")
+FilterByNameAndAge(name string, age int) []User
+```
+
+Use it as:
+
+```go
+users, err := query.FilterByNameAndAge(ctx, "jinzhu", 25).Find(ctx)
+if err != nil {
+  panic(err)
+}
+fmt.Printf("Users: %+v\n", users)
+```
+
+The `Find` method is part of the embedded GORM builder.
+
+---
+
+## 4. Working With Updates
+
+### 4.1. Performing Updates via Generated APIs
+
+Use update methods defined in your interfaces that embed SQL templates with `UPDATE` statements:
+
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age, {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+
+Example usage:
+
+```go
+updateUser := models.User{Name: "jinzhu", Age: 20}
+err := query.UpdateUser(ctx, updateUser, 1)
+if err != nil {
+  panic(err)
+}
+fmt.Println("User updated successfully")
+```
+
+This code uses your SQL template logic embedded in the interface method, generating precise SQL with passed parameters.
+
+---
+
+## 5. Using Model-Driven Field Helpers for Fluent Queries
+
+Beyond the interface-driven queries, GORM CLI generates **field helpers** based on your model fields. This allows you to build queries fluently with predicates and setters.
+
+Example querying with field helpers:
+
+```go
+// Import generated fields for User model
+// Use field helpers for filtering
+users, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18)).
+  Find(ctx)
+
+if err != nil {
+  panic(err)
+}
+fmt.Printf("Users older than 18: %+v\n", users)
+```
+
+### 5.1. Setting Fields in Create or Update
+
+You can use field helpers also in `Set()` clauses for creating or updating columns:
+
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.IsAdult.Set(true),
+  ).
+  Update(ctx)
+
+if err != nil {
+  panic(err)
+}
+```
+
+This code translates to SQL setting the name and status, safely and fluently.
+
+---
+
+## 6. Working with Associations
+
+The generated code includes association helpers you can use to create, update, unlink, or delete related records in a type-safe way.
+
+### 6.1. Creating with Associations
+
+Example: Creating a new user and one pet in one operation:
+
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+if err != nil {
+  panic(err)
+}
+```
+
+### 6.2. Updating Associated Records
+
+Update pets for a user where pet name is 'fido':
+
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+    Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+if err != nil {
+  panic(err)
+}
+```
+
+### 6.3. Unlinking and Deleting Associations
+
+Unlinking removes relationships without deleting rows; deleting removes associated rows.
+
+```go
+// Unlink pets
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete pets
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+
+if err != nil {
+  panic(err)
+}
+```
+
+---
+
+## 7. Verifying Success
+
+- Successful retrievals return structs with fields populated as expected.
+- Updates return `nil` error on success; check errors for failures.
+- Use debug logging with GORM to inspect generated SQL if unexpected behavior occurs:
+
+```go
+db = db.Debug()
+```
+
+- Validate generated files in your output directory after running the generator.
+
+---
+
+## 8. Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Tips">
+<Accordion title="Generated Method Not Found">
+Ensure you imported the correct generated package and instantiated the interface using the generated constructor function with your model type.
+
+Example:
+
+```go
+query := generated.Query[models.User](db)
+```
+</Accordion>
+<Accordion title="Error: No Records Found">
+Check your database connection and data presence. Also verify the ID or filter parameters.
+
+Add error handling for `gorm.ErrRecordNotFound` to handle empty results gracefully.
+</Accordion>
+<Accordion title="Field Helpers Not Working as Expected">
+Make sure your code imports and uses the generated model field helpers correctly. Confirm that your models have been updated and regeneration run after model changes.
+</Accordion>
+<Accordion title="SQL Templates Do Not Compile or Error">
+Check your interface method comments for correct SQL template DSL usage. Missing or malformed templates cause generation errors.
+
+Consult [Template DSL Reference](/overview/product-intro-concepts/what-is-gorm-cli#template-dsl) for valid directives.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 9. Next Steps
+
+- Explore advanced queries by combining generated interfaces and custom SQL templates.
+- Use `genconfig.Config` to customize generation paths and field mappings.
+- Extend your models with associations and test linking and batch operations.
+- Dive into [Generating & Using Type-Safe Query APIs](/guides/core-workflows/generating-and-using-query-apis) to master code generator usage.
+- Check [Working With Associations & Relationships](/guides/advanced-patterns/working-with-associations) for deeper association management.
+
+---
+
+## References
+
+- [Running the Generator](/getting-started/first-run-and-validation/generating-code)
+- [Defining Query Interfaces & Models](/getting-started/first-run-and-validation/defining-interfaces-models)
+- [Template SQL DSL Description](/overview/product-intro-concepts/what-is-gorm-cli#template-dsl)
+- [Model-Driven Field Helper Generation](/guides/core-workflows/model-driven-field-helpers)
+- [Association Operations Guide](/guides/advanced-patterns/working-with-associations)
+
+---
+
+Using these concrete examples and workflows, you can validate your first run of GORM CLI generated code, establish confidence in the correctness, and prepare for productive development with type-safe, fluent database operations.
