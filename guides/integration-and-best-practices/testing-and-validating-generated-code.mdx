@@ -1,0 +1,248 @@
+---
+title: "Testing and Validating Generated Code"
+description: "Best practices for testing both generated query logic and field helpers. Explore strategies for maintaining correctness as models evolve, with suggestions for unit and integration testing patterns."
+---
+
+# Testing and Validating Generated Code
+
+Ensuring the correctness and reliability of your generated query APIs and field helpers is crucial for maintaining robust GORM CLI integrations. This guide provides practical best practices and workflows to test generated code effectively, maintain consistency as your models evolve, and validate that generated filters and queries behave as intended.
+
+---
+
+## 1. Why Test Generated Code?
+
+Generated code for query logic and field helpers form the backbone of your database interactions. While auto-generation enforces type safety and reduces boilerplate, testing:
+
+- Guards against regressions from model or interface changes
+- Validates that SQL templates are correctly translated
+- Ensures filtering, updating, and association helpers generate proper queries
+- Builds confidence in complex query logic
+
+Failure to test can allow subtle bugs in SQL generation or helper methods to propagate undetected, harming your application's data integrity.
+
+---
+
+## 2. Testing Workflow Overview
+
+### Prerequisites
+
+- Generated code from your defined query interfaces and models
+- A testable database setup (can be in-memory SQLite or test containers)
+- Standard Go testing environment (`testing` package)
+
+### Expected Outcome
+
+- Automated Go tests covering query interface methods and generated field helpers
+- Verified SQL output correctness and query behavior
+- Clear feedback on failures to guide fix iterations
+
+### Time Estimate
+
+- Initial test suite setup: 30–60 minutes
+- Ongoing maintenance: minutes per code change
+
+### Difficulty Level
+
+- Intermediate Go and testing knowledge required
+
+---
+
+## 3. Step-by-Step Guide to Testing Generated Code
+
+### Step 1: Set up a Test Database
+
+Start with a lightweight, disposable test database instance.
+
+- Use SQLite in memory mode for speed and isolation
+
+```go
+func setupTestDB(t *testing.T) *gorm.DB {
+  db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+  if err != nil {
+    t.Fatalf("failed to setup test DB: %v", err)
+  }
+  if err := db.AutoMigrate(&models.User{}); err != nil {
+    t.Fatalf("failed to migrate models: %v", err)
+  }
+  return db
+}
+```
+
+### Step 2: Seed Test Data
+
+Populate your test DB with sample data reflecting diverse test cases.
+
+```go
+func seedUsers(t *testing.T, db *gorm.DB, users ...models.User) []models.User {
+  for _, u := range users {
+    if err := db.Create(&u).Error; err != nil {
+      t.Fatalf("failed to seed user: %v", err)
+    }
+  }
+  return users
+}
+```
+
+### Step 3: Write Unit Tests for Query Interface Methods
+
+Use generated code APIs to invoke queries and validate results.
+
+- Check queries like `GetByID`, `FilterWithColumn`, and custom filters
+- Assert returned data matches expectations
+
+```go
+t.Run("Test GetByID", func(t *testing.T) {
+  query := Query[models.User](db)
+  user, err := query.GetByID(context.Background(), specialUserID)
+  if err != nil {
+    t.Errorf("unexpected error: %v", err)
+  }
+  if user.Name != "@name" {
+    t.Errorf("expected '@name', got %+v", user)
+  }
+})
+```
+
+### Step 4: Validate Field Helpers in Filters and Updates
+
+- Use generated helpers to build predicates and update expressions
+- Confirm that database operations reflect the expected changes
+
+```go
+t.Run("Test UpdateInfo", func(t *testing.T) {
+  query := Query[models.User](db)
+  err := query.UpdateInfo(context.Background(), models.User{Name: "alice", Age: 30}, userID)
+  if err != nil {
+    t.Fatal(err)
+  }
+  updatedUser, err := gorm.G[models.User](db).Where(generated.User.ID.Eq(userID)).First(context.Background())
+  if err != nil {
+    t.Fatal(err)
+  }
+  if updatedUser.Age != 30 || !updatedUser.IsAdult {
+    t.Errorf("unexpected update result: %+v", updatedUser)
+  }
+})
+```
+
+### Step 5: Automate Code Generation Tests
+
+- Validate generation correctness using golden file comparisons
+- Run code generation during tests and compare output against expected snapshots
+
+Refer to the internal test suite [`internal/gen/generator_test.go`] which automates:
+- Processing input query interface files
+- Running the generator
+- Parsing and comparing generated code to golden files to detect unintended changes
+
+### Step 6: Integrate Tests into CI
+
+Include your tests in continuous integration to catch issues early whenever models or queries change.
+
+---
+
+## 4. Examples and Patterns
+
+### Testing Filters
+
+```go
+func TestFilterByNameAndAge(t *testing.T) {
+  db := setupTestDB(t)
+  seedUsers(t, db, models.User{Name: "alice", Age: 20}, models.User{Name: "bob", Age: 25})
+  query := Query[models.User](db)
+
+  users, err := query.FilterByNameAndAge(context.Background(), "alice", 20).Find(context.Background())
+  if err != nil {
+    t.Fatalf("filter failed: %v", err)
+  }
+  if len(users) != 1 || users[0].Name != "alice" {
+    t.Errorf("unexpected filter result: %+v", users)
+  }
+}
+```
+
+### Golden File Testing Snapshot
+
+```go
+func TestGeneratorOutput(t *testing.T) {
+  input := "./examples/query.go"
+  outputDir := t.TempDir()
+  gen := &Generator{Files: map[string]*File{}, outPath: outputDir}
+
+  if err := gen.Process(input); err != nil {
+    t.Fatal(err)
+  }
+  if err := gen.Gen(); err != nil {
+    t.Fatal(err)
+  }
+
+  generated, err := os.ReadFile(filepath.Join(outputDir, "query.go"))
+  if err != nil {
+    t.Fatal(err)
+  }
+
+  golden, err := os.ReadFile("./examples/output/query.go")
+  if err != nil {
+    t.Fatal(err)
+  }
+
+  if !bytes.Equal(generated, golden) {
+    t.Error("generated code differs from golden file")
+  }
+}
+```
+
+---
+
+## 5. Troubleshooting Common Issues
+
+### Generated Code Fails Compilation
+
+- Verify your Go project compiles before running generator
+- Confirm interface method syntax and SQL template correctness
+- Ensure correct Go version (1.18+ generics support)
+
+### Data Mismatch in Query Tests
+
+- Check if test data seeded matches your query expectations
+- Confirm filters correctly handle zero-values and conditional SQL
+
+### Golden File Mismatches
+
+- Update golden files only after intentional changes
+- Review diffs carefully to prevent unintended regressions
+
+### Missing Generated Files
+
+- Validate `genconfig.Config` filtering (include/exclude)
+- Confirm input file paths and interfaces are correctly specified
+
+---
+
+## 6. Best Practices
+
+- Write clear, small, and testable query interface methods
+- Seed minimal but representative test data sets
+- Automate generation and test runs in your CI/CD pipeline
+- Use context-aware tests to simulate real query executions
+- Regularly maintain golden files and test data consistency
+- Perform integrations tests with your actual database backend when possible
+
+---
+
+## 7. Next Steps & Related Content
+
+- Explore [Using Your First Generated APIs](https://gorm.io/cli-docs/getting-started/first-steps-with-gorm-cli/basic-usage-validation) to combine testing with real usage
+- Deep dive into [Generating Type-Safe Query APIs](https://gorm.io/cli-docs/guides/core-workflows/generating-type-safe-queries) for template syntax mastery
+- Learn [Working with Associations](https://gorm.io/cli-docs/guides/advanced-patterns/working-with-associations) testing strategies
+- Automate your workflows by following [Automation with CI](https://gorm.io/cli-docs/guides/integration-and-best-practices/automation-with-ci)
+
+---
+
+## References
+
+- Internal code generation tests: `internal/gen/generator_test.go`
+- Example query tests: `examples/output/query_test.go`
+- CLI generation command: `gorm gen -i ./examples -o ./generated`
+
+Use these resources as templates or starting points for your custom test suites.

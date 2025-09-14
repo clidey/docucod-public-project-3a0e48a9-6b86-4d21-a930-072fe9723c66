@@ -1,0 +1,362 @@
+---
+title: "Using Field Helpers and Building Filters"
+description: "Explore how GORM CLI generates field helpers for common predicates, updates, and filtering. Understand strategies for filtering datasets, composing predicates, and combining sample scenarios for robust data wrangling."
+---
+
+# Using Field Helpers and Building Filters with GORM CLI
+
+Explore how GORM CLI generates powerful field helpers for common predicates, updates, and filters. Understand practical strategies for constructing filters, composing predicates, and combining scenarios for robust and type-safe data querying.
+
+---
+
+## 1. Overview
+
+### What You Will Learn
+This guide shows you how to leverage GORM CLI-generated **field helpers** to build expressive, type-safe filters and updates for your GORM models. You will learn how to write queries and updates easily using helpers for fields and how to compose complex filters using multiple predicates.
+
+### Prerequisites
+- You have your Go project set up and GORM CLI installed.
+- Basic knowledge of [GORM CLI](https://github.com/go-gorm/cli) and its code generation flow.
+- Your project includes generated field helpers from your model structs (see [Generating Type-Safe Query APIs](../generating-type-safe-queries) for related).
+
+### Expected Outcome
+By the end, you will be able to:
+- Use generated field helpers to construct filters.
+- Combine predicates using fluent APIs.
+- Apply filters to find, count, update, or delete dataset entries.
+- Handle zero values and SQL expressions in updates.
+
+### Time Estimate
+Approximately 15-20 minutes.
+
+### Difficulty Level
+Beginner to Intermediate.
+
+---
+
+## 2. How GORM CLI Generates Field Helpers
+
+GORM CLI analyzes your model structs and generates a corresponding `generated` Go struct with strongly typed field helpers representing each database column.
+
+For example, from this model:
+
+```go
+// User model with various types of fields
+// including scalar and nullable fields
+package models
+
+type User struct {
+  ID        uint
+  Name      string
+  Age       int
+  Score     sql.NullInt64
+  IsAdult   bool
+  Role      string
+}
+```
+
+GORM CLI generates the following helpers (simplified):
+
+```go
+var User = struct {
+    ID     field.Number[uint]
+    Name   field.String
+    Age    field.Number[int]
+    Score  field.Field[sql.NullInt64]
+    IsAdult field.Bool
+    Role   field.String
+}{
+    ID:     field.Number[uint]{}.WithColumn("id"),
+    Name:   field.String{}.WithColumn("name"),
+    Age:    field.Number[int]{}.WithColumn("age"),
+    Score:  field.Field[sql.NullInt64]{}.WithColumn("score"),
+    IsAdult: field.Bool{}.WithColumn("is_adult"),
+    Role:   field.String{}.WithColumn("role"),
+}
+```
+
+Each helper supports various predicate methods like `.Eq()`, `.Gt()`, `.Like()`, `.IsNull()`, and update methods like `.Set()`, `.Incr()`, `.SetExpr()`, or `.Upper()` on strings.
+
+---
+
+## 3. Building Filters with Field Helpers
+
+### Basic Predicate Usage
+You can write concise and type-safe query filters using the generated field helpers directly inside GORM query builders.
+
+```go
+// Retrieve users older than 18
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18)).
+    Find(ctx)
+
+// Example combining predicates: Age > 18 AND Role = "active"
+users, err = gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx)
+```
+
+Each predicate method returns a `clause.Expression` suitable for GORM's `.Where()` or `.Select()` functions.
+
+### Common Predicates
+- `.Eq(value)` — equals
+- `.Neq(value)` — not equals
+- `.Gt(value)` / `.Gte(value)` — greater than / greater or equal
+- `.Lt(value)` / `.Lte(value)` — less than / less or equal
+- `.Like(pattern)` — LIKE matching
+- `.In(values...)` — IN clause
+- `.IsNull()` / `.IsNotNull()` — NULL checks
+
+
+### Composing Multiple Conditions
+You can combine multiple predicates simply by passing them as variadic arguments to `.Where()`:
+
+```go
+gorm.G[models.User](db).
+    Where(
+      generated.User.Age.Between(18, 30),
+      generated.User.Role.Eq("active"),
+      generated.User.IsAdult.Eq(true),
+    ).
+    Find(ctx)
+```
+
+This example filters all users with age between 18 and 30, role active, and marked adult.
+
+### Filter By Slice or Multiple Values
+Filters can be built using slices with predicates like `.In()`:
+
+```go
+userIDs := []uint{1, 3, 5}
+users, err := gorm.G[models.User](db).
+    Where(generated.User.ID.In(userIDs...)).
+    Find(ctx)
+```
+
+Or by filtering arrays of models with complex logic via generated helpers combined with SQL template methods (see examples below).
+
+---
+
+## 4. Using Field Helpers for Updates
+
+The generated helpers also support strongly typed updates.
+
+### Zero-Value Updates
+You can explicitly set zero values (like empty string, 0, false, or NULL) using `.Set()` on a helper.
+
+```go
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Set(
+      generated.User.Age.Set(0),           // sets age to 0
+      generated.User.IsAdult.Set(false),   // sets false
+      generated.User.Role.Set("")        // sets to empty string
+    ).
+    Update(ctx)
+```
+
+### Incrementing Numeric Fields
+Use `.Incr(amount)` to increment numeric fields safely.
+
+```go
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(
+      generated.User.Age.Incr(1),          // increments age by 1
+    ).
+    Update(ctx)
+```
+
+### Complex SQL Expressions
+Use `.SetExpr()` with raw SQL expressions wrapped as `clause.Expr`:
+
+```go
+import "gorm.io/gorm/clause"
+
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("cathy")).
+    Set(
+      generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{2}}),
+    ).
+    Update(ctx)
+```
+
+### String Manipulation Helpers
+For strings, helpers include `.Upper()` and `.Lower()` to update fields by transforming values directly in SQL.
+
+```go
+_, err := gorm.G[models.User](db).
+   Where(generated.User.Name.Eq("alice")).
+   Set(
+      generated.User.Name.Upper(),         // sets name to uppercase
+   ).
+   Update(ctx)
+```
+
+---
+
+## 5. Practical Examples
+
+### Example 1: Find Active Users Older Than a Certain Age
+
+```go
+ctx := context.Background()
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx)
+if err != nil {
+  // handle error
+}
+```
+
+### Example 2: Update User Role from "pending" to "active"
+
+```go
+rowsAffected, err := gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Set(generated.User.Role.Set("active")).
+    Update(ctx)
+if err != nil {
+  // handle error
+}
+```
+
+### Example 3: Create a New User with Initial Values
+
+```go
+err := gorm.G[models.User](db).
+    Set(
+      generated.User.Name.Set("new_user"),
+      generated.User.Age.Set(30),
+      generated.User.Role.Set("active"),
+      generated.User.IsAdult.Set(true),
+    ).
+    Create(ctx)
+if err != nil {
+  // handle error
+}
+```
+
+### Example 4: Delete All Users with role = "pending"
+
+```go
+rowsDeleted, err := gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Delete(ctx)
+if err != nil {
+  // handle error
+}
+```
+
+### Example 5: Using Complex Filters in Queries
+
+Filter users who have both Name and Age matching certain criteria, combined with role containing substring.
+
+```go
+// Assume we have multiple users to filter by
+usersToFilter := []models.User{
+  {Name: "alice", Age: 25, Role: "active"},
+  {Name: "bob", Age: 30, Role: "pending"},
+}
+
+foundUsers, err := generated.Query[models.User](db).
+  Filter(usersToFilter).
+  Find(ctx)
+
+// Filter method uses custom SQL templating to combine with OR logic internally
+```
+
+---
+
+## 6. Advanced Filtering: Using SQL Template Methods in Query Interfaces
+
+You can define flexible query methods using embedded SQL templates in your query interfaces, which complement field helpers for dynamic, conditional filtering.
+
+**Example Interface:**
+
+```go
+type Query[T any] interface {
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+
+  // Sample with conditional WHERE using {{where}} directive
+  FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+These work with helpers in your generated code and provide maximum expressiveness, especially for batch or conditional operations.
+
+---
+
+## 7. Tips & Best Practices
+
+- **Always prefer generated field helpers** for predicates instead of raw SQL to ensure type safety and auto-completion.
+- **Use `.Set()` and `.SetExpr()` for updates** to handle zero values and expressions cleanly.
+- **Combine predicates by passing multiple arguments to `.Where()`** for AND-combined conditions.
+- For OR conditions or more complex logic, write custom SQL template queries in query interfaces.
+- **Leverage `IsNull()` and `IsNotNull()`** predicates for nullable fields.
+- To update string fields with transformations use `.Upper()` or `.Lower()` helper methods.
+- Test filtering and updates with zero values carefully, as sometimes explicit zeroing is required.
+
+---
+
+## 8. Troubleshooting & Common Pitfalls
+
+### Issue: Filters Return No Results
+- Verify your predicate values are correctly typed and match the underlying column.
+- Check that you are combining predicates with `.Where()` correctly — all predicates passed are combined with AND.
+- Confirm that nullable fields are queried with `.IsNull()` or `.IsNotNull()` as appropriate.
+
+### Issue: Updates With Zero Values Do Not Persist
+- Always use `.Set()` helpers even for zero or empty values to ensure explicit updates.
+- Avoid omitting fields with zero values unless intentionally skipped by SQL templates.
+
+### Issue: Unexpected SQL Generation
+- Review the generated code and ensure your model fields are correctly tagged and recognized.
+- If using custom field types, verify the generator configuration maps them properly with `FieldTypeMap` or `FieldNameMap`.
+
+---
+
+## 9. Next Steps & Related Content
+
+- Explore [Generating Type-Safe Query APIs](../generating-type-safe-queries) to write custom SQL templates along with field helpers.
+- Deep dive into [Working with Associations](../../advanced-patterns/working-with-associations) for generated helpers on related models.
+- Learn how to [Customize Code Generation](../../advanced-patterns/customizing-generation-output) to tailor helper behavior.
+- For automation in your CI, see [Automating Code Generation with CI](../../integration-and-best-practices/automation-with-ci).
+
+---
+
+## Appendix: Sample Code Snippet
+
+```go
+// Get all users aged over 18 and active role
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx)
+
+// Update user "alice" role to "active" and set age to 30 explicitly
+_, err = gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Set(
+      generated.User.Role.Set("active"),
+      generated.User.Age.Set(30),
+    ).
+    Update(ctx)
+
+// Create new user with initial fields
+err = gorm.G[models.User](db).
+    Set(
+      generated.User.Name.Set("new_user"),
+      generated.User.Age.Set(22),
+      generated.User.Role.Set("pending"),
+      generated.User.IsAdult.Set(false),
+    ).
+    Create(ctx)
+
+// Delete all pending users
+_, err = gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Delete(ctx)
+```
+
+---
