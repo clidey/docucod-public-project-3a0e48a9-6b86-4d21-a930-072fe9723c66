@@ -1,0 +1,208 @@
+---
+title: "Type Safety, Permissions, and Security Posture"
+description: "Understand the guarantees offered by interface- and type-driven generation, mechanisms for minimizing runtime query errors, and how field and association helpers enforce safe data manipulation."
+---
+
+# Type Safety, Permissions, and Security Posture
+
+GORM CLI empowers Go developers with robust, compile-time guarantees for safe and correct database interactions. This page explains how GORM CLI’s type-driven, interface-guided generation minimizes runtime query errors, enforces permission boundaries, and leverages generated model field and association helpers to ensure safe data manipulation.
+
+---
+
+## Why Type Safety Matters in Database Access
+
+Database queries are a common source of bugs and security risks due to runtime errors, SQL injection vulnerabilities, and incorrect data handling. GORM CLI transforms your query interfaces and data models into strongly typed, compile-time checked APIs, shifting error detection from runtime to compile time.
+
+By generating fluent, type-safe query APIs and model field helpers derived from your Go interfaces and structs, GORM CLI stops incorrect queries before they run. This reduces bugs, improves code readability, and increases confidence in your data layer.
+
+---
+
+## Guarantees Offered by Interface- and Type-Driven Generation
+
+### Compile-Time Checks
+
+Every generated API method corresponds to a query interface definition with embedded SQL templates. The method signatures bind parameters to query placeholders typesafe, so the compiler verifies:
+
+- That all query parameters are passed and of the correct Go type
+- Return values match the expected model or error types
+- Context injection is automatic if missing, ensuring proper cancellation and deadlines
+
+This immediate feedback loop prevents runtime panics and errors related to malformed queries or mismatched parameters.
+
+### Enforced Query Semantics
+
+SQL templates written in Go interface comments are validated and transformed into executable methods implementing the query logic. You cannot invoke a query method that is improperly defined without the correct parameters.
+
+Additionally, use of the SQL Template DSL (`@@table`, `@param`, `{{where}}`, `{{set}}`, etc.) guarantees correct parameter binding and prevents common SQL injection pitfalls. The generator safely resolves columns and table names, minimizing injection vectors.
+
+### Context-Aware Chaining and Execution
+
+Generated APIs are designed to compose fluent query builder patterns while ensuring type safety at every step. Compiler-enforced signatures guarantee that chained calls align with expected data models, aiding in safe construction of complex queries without runtime guesswork.
+
+---
+
+## Safe Data Manipulation with Model Field and Association Helpers
+
+GORM CLI also generates model-driven field helpers that expose strongly typed predicates and setters for your structs’ fields and relations.
+
+### Field Helpers: Filters, Updates, and Predicates
+
+For each basic model field (e.g., integers, strings, booleans, time.Time, and more), GORM CLI produces helpers that enable safe:
+
+- **Filtering** — e.g., `generated.User.Age.Gt(18)` compiles to `age > 18` clauses
+- **Updates** — e.g., `generated.User.Name.Set("alice")` safely assigns a name
+- **Conditions** — zero-value updates, `IsNull`, `Between`, `Like`, and expressions
+
+These helpers prevent common mistakes such as type mismatches, forgotten null-safe comparisons, or invalid SQL expressions.
+
+### Association Helpers: Managing Related Data Safely
+
+Associations (`has one`, `has many`, `belongs to`, `many2many`, including polymorphic) are wrapped as field helpers with operations:
+
+- **Create**: Create and link associated records atomically
+- **Update**: Selectively update associated rows using filters
+- **Unlink**: Remove foreign key associations without deleting data
+- **Delete**: Delete associated records safely, e.g., join table rows
+- **Batch Create**: Bulk link multiple related records
+
+Each association type respects its semantics at the database level (foreign key NULLing, join table removal, cascading deletes), avoiding unsafe mutations and enforcing logical consistency.
+
+### Operation Semantics Summary
+
+| Association Type | Unlink Action           | Delete Action            |
+|------------------|------------------------|--------------------------|
+| `belongs to`     | FK set to NULL          | Delete associated rows   |
+| `has one/many`   | FK set to NULL on child | Delete child rows         |
+| `many2many`      | Remove join table rows  | Remove join table rows    |
+
+These precise semantics prevent accidental data loss and ensure clear intent when manipulating relations.
+
+---
+
+## Designing Permission Boundaries with Type Safety
+
+By leveraging the interface-driven API generation, you can establish a permission and access control layer:
+
+- Define query interfaces scoped to roles with limited operation sets (read-only, filtered write access, etc.)
+- Generate granular APIs that only expose permitted queries and updates in your application layer
+- Enforce access checks at compile-time by controlling which generated interfaces and structs are included via configuration
+
+This approach supplements runtime permission mechanisms by embedding access control boundaries into your typed API definitions.
+
+---
+
+## Best Practices for Maintaining a Secure and Safe Codebase
+
+- **Keep your models and interfaces synchronized**: Ensure your Go model structs and query interfaces reflect expected schema and usage
+- **Leverage generation configuration** (`genconfig.Config`) to whitelist or blacklist interfaces and structs to enforce code scoping
+- **Use field helpers for all data updates** to avoid raw SQL or string concatenations
+- **Write comprehensive SQL templates** that fully parameterize queries to avoid injection vectors
+- **Test generated APIs** promptly after generation to catch semantic or permission mismatch early
+
+---
+
+## Common Pitfalls and How to Avoid Them
+
+- _Mixing string literals in SQL templates without proper parameter binding_ — Always use `@param` bindings instead of direct interpolation.
+- _Forgetting context in method signatures_ — GORM CLI auto-injects context if missing, but explicit passing ensures clarity.
+- _Using raw SQL strings directly_ outside generated APIs — prefer generated fluent methods to reduce injection risk.
+- _Skipping generation after model or interface changes_ — always rerun the generator to keep APIs synced.
+- _Incorrect use of association helpers semantics_ — review unlink vs delete operations carefully, especially with many2many relations.
+
+---
+
+## Example: Safe Query and Update Workflow
+
+```go
+// Using generated query interface to get user by ID
+user, err := generated.Query[models.User](db).GetByID(ctx, 123)
+if err != nil {
+  panic(err)
+}
+
+// Update user name and mark as adult safely
+err = generated.Query[models.User](db).UpdateInfo(ctx, models.User{Name: "alice", Age: 20}, 123)
+if err != nil {
+  panic(err)
+}
+
+// Create a new user with pets using association helpers
+err = gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("bob"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fluffy")),
+  ).Create(ctx)
+if err != nil {
+  panic(err)
+}
+```
+
+---
+
+## Summary Diagram: Data Flow with Type Safety and Permissions
+
+```mermaid
+flowchart TD
+
+  User["User Code"] --> |"Defines"| Interfaces["Query Interfaces with SQL Templates"]
+  User --> |"Defines"| Models["Go Model Structs"]
+
+  subgraph GORM CLI Generator
+    Interfaces -->|"Parse & Analyze"| Generator["Generation Engine"]
+    Models --> Generator
+    Generator --> |"Generate"| QueryAPIs["Type-Safe Query APIs"]
+    Generator --> |"Generate"| FieldHelpers["Model Field & Association Helpers"]
+  end
+
+  QueryAPIs -->|"Used By"| AppCode["Application Components"]
+  FieldHelpers --> |"Used By"| AppCode
+
+  AppCode -->|"Enforces Permissions & Safety"| Database["Database"]
+
+  classDef generated fill:#d5f4e6,stroke:#333,stroke-width:1.5px;
+  Generator,QueryAPIs,FieldHelpers generated
+```
+
+---
+
+## Troubleshooting Common Issues
+
+### Generated APIs Not Reflecting Model Changes
+- Ensure you run `gorm gen` after any model or interface modification.
+- Verify no build errors exist preventing generation.
+- Confirm generation paths align with your project structure.
+
+### Runtime Errors Due to Missing Context
+- If your interface methods omit `context.Context`, GORM CLI injects it automatically.
+- Always explicitly pass context when invoking methods for clarity.
+
+### Association Operation Confusion
+- Remember unlink clears FK without deleting rows.
+- Use Delete only when you want to remove data, especially with many2many.
+- Check the generated helper method comments for semantics.
+
+### Permission Scope Misconfiguration
+- Use `genconfig.Config` to Include/Exclude interfaces or structs to restrict the generated APIs.
+- Validate your config paths and names correctly match your interfaces.
+
+---
+
+## Next Steps
+
+- Explore [Quick Start Workflow](../quickstart-features/quickstart-workflow) for hands-on generation and usage
+- Review [Model Field Helpers](../query-and-model-helpers/model-driven-field-helpers) to master safe data filtering and updating
+- Understand the [Interface-Driven Query APIs](../core-architecture/interface-and-template-approach) for writing secure, type-safe queries
+- Configure generation safely using [Customization via Config](../data-modeling-and-extensibility/customization-via-config) to tailor your API surface
+
+
+---
+
+For a deep dive into SQL templating, security best practices, and advanced generation customization, consult the [Template DSL Tutorial](../query-and-model-helpers/template-dsl-tutorial) and [Custom Field Helpers](../advanced-integration/custom-helper-json) documentation.
+
+
+---
+
+This page clarifies how GORM CLI creates a secure, type-safe data access layer by tightly coupling your Go code’s types and SQL templates with generated APIs that enforce safety and permissions at compile time.
+
+
+
