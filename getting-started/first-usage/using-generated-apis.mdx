@@ -1,0 +1,249 @@
+---
+title: "Using the Generated APIs"
+description: "Learn to leverage the newly generated, type-safe query APIs and field helpers in your Go application. Explains common usage patterns for querying, filtering, and updating models using the generated code."
+---
+
+# Using the Generated APIs
+
+Leverage the power of the automatically generated, type-safe query APIs and field helpers in your Go application. This guide focuses on how to use these generated components to build, filter, and update your models efficiently with confidence in type safety and SQL correctness.
+
+---
+
+## 1. Understanding Your Generated API
+
+After running the GORM CLI generator on your interfaces and model structs, you receive two core assets:
+
+- **Query APIs**: Concrete implementations of your annotated query interfaces with type-safe methods that map your Go method parameters directly into SQL templates.
+- **Field Helpers**: Typed struct fields providing fluent predicates and setters that simplify constructing expressive, error-free WHERE clauses and UPDATE sets.
+
+## 2. How to Import and Initialize
+
+Start by importing the generated package in your application. Suppose your generated code resides in `generated`:
+
+```go
+import (
+  "context"
+  "gorm.io/gorm"
+  "your_module/generated"
+  "your_module/models"
+)
+
+func example(db *gorm.DB) {
+  ctx := context.Background()
+
+  // Initialize the Query API for User
+  queryAPI := generated.Query[models.User](db)
+
+  // Use as needed...
+}
+```
+
+## 3. Common Usage Patterns
+
+### 3.1 Querying by ID
+
+Use the `GetByID` method generated from your SQL template interface to fetch a single record by its primary key.
+
+```go
+user, err := queryAPI.GetByID(ctx, 123)
+if err != nil {
+  // handle error
+}
+fmt.Println("User:", user)
+```
+
+This corresponds to the SQL:
+
+```sql
+SELECT * FROM users WHERE id = ?
+```
+
+### 3.2 Filtering By Arbitrary Columns
+
+The `FilterWithColumn` method allows dynamic column filters using strings.
+
+```go
+userWithName, err := queryAPI.FilterWithColumn(ctx, "name", "alice")
+```
+
+Internally this binds to a query like:
+
+```sql
+SELECT * FROM users WHERE name = ?
+```
+
+### 3.3 Complex Conditional Queries
+
+Use method `QueryWith` to build conditional filter patterns based on struct fields.
+
+```go
+userCriteria := models.User{Name: "bob"}
+users, err := queryAPI.QueryWith(ctx, userCriteria)
+```
+
+This will dynamically generate a SQL query with conditions only if fields are present.
+
+### 3.4 Bulk Filters with Collection Iteration
+
+The `Filter` method supports filtering on slices with complex conditional logic applied inside an SQL template loop.
+
+```go
+criteria := []models.User{
+  {Name: "alice", Age: 30},
+  {Name: "bob", Age: 25},
+}
+filteredUsers, err := queryAPI.Filter(ctx, criteria)
+```
+
+### 3.5 Filtering Using Named Parameters
+
+You can also apply static filters using explicit parameter methods like `FilterByNameAndAge`.
+
+```go
+users, err := queryAPI.FilterByNameAndAge(ctx, "alice", 30)
+```
+
+### 3.6 Time Range Filtering
+
+The `FilterWithTime` method enables time-based filtering with nullable `start` and `end` boundaries.
+
+```go
+start := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+end := time.Now()
+users, err := queryAPI.FilterWithTime(ctx, start, end)
+```
+
+## 4. Updating Records
+
+Generated code also supports dynamic, conditional updates through methods like `UpdateInfo`.
+
+```go
+updateUser := models.User{Name: "alice", Age: 26}
+err := queryAPI.UpdateInfo(ctx, updateUser, 123) // Update user with ID 123
+if err != nil {
+  // handle error
+}
+```
+
+This updates only provided fields and evaluates conditions such as setting `is_adult` based on age.
+
+## 5. Leveraging Field Helpers for Fluent Queries
+
+Beyond the query interface methods, you can compose queries and updates directly using generated field helpers from your model structs.
+
+Example: Construct a predicate to find users older than 18:
+
+```go
+users, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18)).
+  Find(ctx)
+```
+
+You can combine these helpers to express complex conditions fluently and safely:
+
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.Name.Like("%jinzhu%"), generated.User.Age.Between(18, 65)).
+  Update(ctx, generated.User.Status.Set("active"))
+```
+
+## 6. Example Walkthrough
+
+Here is a full example that uses generated APIs for querying, filtering, and updating:
+
+```go
+func main() {
+  ctx := context.Background()
+  db := getYourGormDB() // Initialize your *gorm.DB
+
+  queryAPI := generated.Query[models.User](db)
+
+  // Query user by ID
+  user, err := queryAPI.GetByID(ctx, 1)
+  if err != nil {
+    log.Fatal(err)
+  }
+  fmt.Println("Queried User:", user)
+
+  // Filter users with name and age
+  filteredUsers, err := queryAPI.FilterByNameAndAge(ctx, "alice", 30)
+  if err != nil {
+    log.Fatal(err)
+  }
+  fmt.Println("Filtered Users:", filteredUsers)
+
+  // Update user info based on conditions
+  update := models.User{Name: "alice updated", Age: 27}
+  err = queryAPI.UpdateInfo(ctx, update, user.ID)
+  if err != nil {
+    log.Fatal(err)
+  }
+
+  fmt.Println("Update successful")
+}
+```
+
+## 7. Best Practices and Tips
+
+- **Always use `context.Context` in your method calls** to allow cancellation and timeouts.
+- **Prefer generated query methods over raw SQL** for compile-time safety and parameter binding.
+- **Use field helpers for constructing predicates and setters** to avoid misspelled column names and unsafe SQL fragments.
+- **Leverage conditional SQL templates** in your interfaces to handle flexible query scenarios.
+- **Update only the fields you need**, avoiding accidental overwrites.
+
+## 8. Troubleshooting Common Issues
+
+<AccordionGroup title="Common Issues When Using Generated APIs">
+<Accordion title="Error: Generated method not found or missing parameters">
+Make sure you have:
+- Defined the interface with proper SQL template comments.
+- Ran the `gorm gen` command successfully to regenerate code.
+- Imported the correct generated package.
+- Passed all required parameters in method calls.
+</Accordion>
+<Accordion title="Queries returning no results unexpectedly">
+Check:
+- Your filter conditions - ensure field values are set correctly.
+- SQL templates - verify the template maps parameters properly.
+- Database connectivity and data presence.
+</Accordion>
+<Accordion title="Update operations not applying changes">
+Verify:
+- That the conditional clauses in your SQL template evaluate correctly.
+- You’re updating the correct IDs or row identifiers.
+- No conflicting transactions or locks.
+</Accordion>
+</AccordionGroup>
+
+## 9. Next Steps
+
+- Begin writing your own query interfaces with annotated SQL templates.
+- Explore [SQL Template DSL](../guides/advanced-patterns-integration/template-sql-dsl) for crafting advanced queries.
+- Use field helpers extensively for filtering, ordering, and association operations.
+- Consult the [Field Helpers Guide](../guides/getting-started-workflows/field-helpers-basics) to understand predicate and setter patterns fully.
+
+---
+
+## Appendix: Quick Reference Table for Common Methods
+
+| Method Name         | Purpose                                      | Parameters                | Return Type           |
+|---------------------|----------------------------------------------|---------------------------|-----------------------|
+| `GetByID`           | Fetch a single model by primary ID            | `ctx context.Context, id int` | `(T, error)`           |
+| `FilterWithColumn`  | Query by arbitrary column name and value     | `ctx context.Context, column string, value string` | `(T, error)` |
+| `QueryWith`         | Conditional query with model struct criteria  | `ctx context.Context, user models.User` | `(T, error)`          |
+| `UpdateInfo`        | Conditional UPDATE on model by ID             | `ctx context.Context, user models.User, id int` | `error`               |
+| `Filter`            | Bulk filter with slice of models              | `ctx context.Context, users []models.User` | `([]T, error)`        |
+| `FilterByNameAndAge`| Explicit WHERE filter by name and age         | `ctx context.Context, name string, age int` | `(T, error)`          |
+| `FilterWithTime`    | Time range filter with start and end times    | `ctx context.Context, start, end time.Time` | `([]T, error)`        |
+
+---
+
+## References
+- [SQL Template DSL Guide](../guides/advanced-patterns-integration/template-sql-dsl)
+- [Field Helpers: Filtering, Updates, and Expressions](../guides/getting-started-workflows/field-helpers-basics)
+- [First Code Generation](../getting-started/first-usage/first-code-generation)
+- [Troubleshooting and Validation](../getting-started/first-usage/troubleshooting-validation)
+- GORM CLI official [GitHub Repository](https://github.com/go-gorm/cli)
+
+
+<Source url="https://github.com/go-gorm/cli" branch="main" paths={[{"path": "examples/query.go", "range": "1-70"}]} />
