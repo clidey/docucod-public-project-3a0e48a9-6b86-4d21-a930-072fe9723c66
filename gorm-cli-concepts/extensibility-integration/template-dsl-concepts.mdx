@@ -1,0 +1,274 @@
+---
+title: "SQL Template DSL Fundamentals"
+description: "Discover the embedded SQL template DSL, including directive patterns, parameterization, and conditional logic for dynamic query generation. This page explains the conceptual design of the template language, empowering advanced use cases."
+---
+
+# SQL Template DSL Fundamentals
+
+Explore the embedded SQL template DSL used by GORM CLI to write dynamic, type-safe, and efficient query methods directly within Go interface comments. This page demystifies the directive patterns, parameter handling, and conditional logic that empower users to craft flexible SQL queries and update statements seamlessly integrated into generated APIs.
+
+---
+
+## Introduction to the SQL Template DSL
+
+GORM CLI leverages a powerful SQL template DSL embedded within Go interface method comments to produce type-safe query implementations. This DSL allows you to write SQL-like snippets enriched with directives and placeholders that the generator transforms into executable Go code.
+
+### Why Use the Template DSL?
+
+- **Type safety:** Bind parameters directly to method arguments, ensured at compile time.
+- **Dynamic SQL:** Use conditionals, loops, and placeholders for flexible query construction.
+- **Seamless integration:** Combine raw SQL with GORM idioms without losing the fluency in your Go code.
+
+### Core Concepts
+
+- Templates live as **comments on interface methods**.
+- Method parameters map to SQL query parameters.
+- The generator parses the templates and emits Go code with binding logic.
+
+<Info>
+The DSL runs on a lightweight templating language that interprets directives such as `{{where}}`, `{{set}}`, `{{if}}`, and `{{for}}`.
+</Info>
+
+---
+
+## Directive Patterns and Usage
+
+GORM CLI's SQL template DSL supports distinct directive types that control query construction:
+
+| Directive   | Purpose                          | Example Usage                                                  |
+| ----------- | -------------------------------- | -------------------------------------------------------------- |
+| `@@table`   | Inserts the bound model's table name | `SELECT * FROM @@table WHERE id=@id`                          |
+| `@@column`  | Inserts a dynamic column name     | `SELECT * FROM @@table WHERE @@column=@value`                 |
+| `@param`    | Binds a Go method parameter       | `WHERE name=@user.Name`                                       |
+| `{{where}}` | Begins a conditional WHERE block   | `{{where}} age > 18 {{end}}`                                  |
+| `{{set}}`   | Begins a conditional SET block     | `{{set}} name=@name {{end}}`                                   |
+| `{{if}}`    | Adds conditional execution inside blocks | `{{if age > 0}} AND age=@age {{end}}`                       |
+| `{{for}}`   | Loop over collections inside blocks | `{{for _, tag := range tags}} ... {{end}}`                   |
+
+
+### Table and Column Placeholders
+
+- `@@table` always resolves to the current model’s database table name.
+- `@@column` resolves to a dynamic column identified at runtime, used with parameters for flexible queries.
+
+<CodeGroup>
+```sql
+-- Example: Select a record by ID
+SELECT * FROM @@table WHERE id=@id
+```
+```sql
+-- Example: Filter by a dynamic column
+SELECT * FROM @@table WHERE @@column=@value
+```
+</CodeGroup>
+
+### Parameter Binding
+
+Use the notation `@paramName` to bind Go function parameters or struct fields from parameters inside SQL.
+
+<CodeGroup>
+```sql
+-- Example: bind a struct field
+WHERE name=@user.Name
+```
+```go
+// Go interface method with parameter user
+FilterByUser(user User) (User, error)
+```
+</CodeGroup>
+
+---
+
+## Conditional Blocks
+
+Use `{{where}}` and `{{set}}` blocks to wrap conditional SQL generation. Inside these blocks, you can use `if` and `for` directives to dynamically include or exclude SQL fragments.
+
+### `{{where}}` Block
+
+Builds conditional WHERE clauses by collecting fragments and trimming unnecessary operators (like leading AND/OR).
+
+```sql
+{{where}}
+  {{if age > 0}}
+    age=@age
+  {{end}}
+{{end}}
+```
+
+### `{{set}}` Block
+
+Constructs conditional SET clauses for UPDATE statements, handling commas and spacing.
+
+```sql
+{{set}}
+  {{if user.Name != ""}} name=@user.Name, {{end}}
+  {{if user.Age > 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+{{end}}
+```
+
+### `{{if}}` Directive
+
+Adds if-else conditional logic for controlling SQL fragments.
+
+```sql
+{{if user.Age > 18}}
+  is_adult=1
+{{else}}
+  is_adult=0
+{{end}}
+```
+
+### `{{for}}` Directive
+
+Iterates over slice or array to generate repeated SQL parts.
+
+```sql
+{{for _, tag := range tags}}
+  tags LIKE concat("%",@tag,"%") OR
+{{end}}
+```
+
+---
+
+## Real-World Examples
+
+### Example 1: Basic Select with Conditional Filtering
+
+```go
+// Interface method in Query interface
+// Selects from users with optional filtering by ID or Name
+//
+// SELECT * FROM @@table
+//   {{if user.ID > 0}}
+//     WHERE id=@user.ID
+//   {{else if user.Name != ""}}
+//     WHERE name=@user.Name
+//   {{end}}
+QueryWith(user User) (User, error)
+```
+
+This method translates into SQL that conditionally filters on `id` or `name` depending on which field is set.
+
+### Example 2: Update with Dynamic SET Clause
+
+```go
+// Update statement with optional fields
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age, {{end}}
+//   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateInfo(user User, id int) error
+```
+
+The generated code ensures only the changed fields are updated, with the is_adult flag computed based on age.
+
+### Example 3: Complex Filtering with Loops
+
+```go
+// Filters users by multiple fields in a slice
+// SELECT * FROM @@table
+// {{where}}
+//   {{for _, user := range users}}
+//     {{if user.Name != "" && user.Age > 0}}
+//       (name=@user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+//     {{end}}
+//   {{end}}
+// {{end}}
+Filter(users []User) ([]User, error)
+```
+
+This example dynamically builds a WHERE clause by looping over user filters and combining conditions with OR.
+
+---
+
+## How the DSL Is Processed Internally
+
+The SQL templates are parsed into an abstract syntax tree of nodes:
+
+- **Text nodes:** Plain SQL text with placeholders
+- **Function nodes:** Such as `where` or `set` blocks
+- **If nodes:** Conditionals with multiple branches
+- **For nodes:** Loop blocks
+
+These nodes generate Go code that builds the final SQL string dynamically at runtime, binding parameters safely.
+
+---
+
+## Best Practices and Tips
+
+- **Always use placeholders** (`@param`) to avoid SQL injection.
+- **Use `{{where}}` and `{{set}}` blocks** to conditionally include clauses without leaving dangling AND/OR or commas.
+- **Leverage `{{if}}` and `{{for}}`** for conditional logic and iterations.
+- **Escape literal `@` by prefixing with backslash (`\@`)** to avoid parsing as parameters.
+- **Keep methods focused** — complex logic can be split into multiple interface methods.
+
+---
+
+## Troubleshooting Common Issues
+
+<Warning>
+- Missing `{{end}}` directives cause parsing errors; check all blocks are properly closed.
+- Unmatched parameters or mismatched types between method signature and template cause generation failures.
+- Avoid complex Go logic inside templates; keep it within conditions and loops only.
+</Warning>
+
+<Info>
+Refer to the [Template-Based Query APIs Guide](/guides/core-workflows/template-based-queries) for detailed patterns and usage examples.
+</Info>
+
+---
+
+## Visualizing the Template Parsing Flow
+
+```mermaid
+graph TD
+  Start([Start Parsing Template]) --> ParseText[Parse Text Nodes]
+  ParseText -->|Detect Directive| Directive{Directive Type?}
+
+  Directive -->|where/set| FuncBlock[FuncNode (where/set Block)]
+  Directive -->|for| ForBlock[ForNode (Loop Block)]
+  Directive -->|if| IfBlock[IfNode (Conditional Block)]
+  Directive -->|else if| ElseIfBranch[Add ElseIf Branch]
+  Directive -->|else| ElseBranch[Add Else Branch]
+  Directive -->|end| EndBlock[Close Current Block]
+  Directive -->|unknown| Error[Error: Unknown Directive]
+
+  FuncBlock --> ParseText
+  ForBlock --> ParseText
+  IfBlock --> ParseText
+  ElseIfBranch --> ParseText
+  ElseBranch --> ParseText
+  EndBlock --> ParseText
+
+  ParseText -->|All Lines Parsed| Done[Generate Go Code for Template]
+
+  Error --> Stop[Parsing Failed]
+```
+
+This flow highlights how the parser builds an AST corresponding to your SQL template and generates robust Go code to implement the dynamic queries.
+
+---
+
+## Next Steps
+
+After mastering the SQL Template DSL, explore related materials to fully harness GORM CLI:
+
+- [Template-Based Query APIs Guide](/guides/core-workflows/template-based-queries) — for writing advanced query methods
+- [Managing Associations in Generated Code](/guides/core-workflows/associations-in-depth) — for complex relationship manipulation
+- [Field Helper Design and Typing](/gorm-cli-concepts/data-models-schemas/field-helper-strategy) — for powerful typed fields
+
+
+---
+
+## References
+
+- [GORM CLI README](https://github.com/go-gorm/cli/blob/main/README.md)
+- [Internal Template Parser Code](https://github.com/go-gorm/cli/blob/main/internal/gen/sqlparser.go)
+- Example queries from `examples/query.go`
+
+---
+
+Empowered with this DSL, you can write flexible, readable, and safe SQL queries embedded seamlessly within your Go code, elevating productivity and confidence in your backend database handling with GORM CLI.
