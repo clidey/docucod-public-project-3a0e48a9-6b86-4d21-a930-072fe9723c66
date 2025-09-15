@@ -1,0 +1,281 @@
+---
+title: "Integration with GORM"
+description: "Understand how the generated code seamlessly integrates with GORM’s database abstraction, leveraging generics and GORM idioms. This page clarifies the boundaries and extension points between generated APIs and the GORM runtime."
+---
+
+# Integration with GORM
+
+Understanding how the generated code seamlessly integrates with GORM’s database abstraction is crucial to leveraging the full power of GORM CLI. This page clarifies the boundaries and extension points between the generated APIs and the GORM runtime, showing how generics and GORM idioms are combined to provide a fluent, type-safe developer experience.
+
+---
+
+## Overview
+
+GORM CLI generates idiomatic Go code that directly builds upon `gorm.io/gorm`’s existing generic API, wrapping and extending it with type-safe query methods and model-driven field helpers. The integration lets you unlock compile-time safety and create expressive database operations without sacrificing the familiar flexibility of GORM’s fluent builder.
+
+This page explains:
+
+- How generated query interfaces relate to `gorm.Interface[T]`
+- The role of generics in bridging GORM CLI code with GORM runtime APIs
+- How generated field helpers map to GORM query clauses
+- Extension points where you can customize or extend behavior safely
+
+> This knowledge empowers you to understand what the generated code does **under the hood** so you can customize and extend your data access layer with confidence.
+
+---
+
+## Core Integration Concepts
+
+### Generated Interfaces Wrap GORM Generic APIs
+
+Each interface you define with SQL templates (e.g., `Query[T any]`) is generated as a Go interface **embedding** `gorm.Interface[T]`. This means every generated interface:
+
+- Provides type-safe methods that represent your queries
+- Internally calls the generic `gorm.G[T]` function to obtain a core GORM interface instance
+- Wraps that instance in a thin implementation struct that adds methods for your templates
+
+This pattern ensures your generated methods seamlessly fit into the expected GORM fluent query chains:
+
+```go
+func Query[T any](db *gorm.DB, opts ...clause.Expression) QueryInterface[T] {
+    return QueryImpl[T]{
+        Interface: gorm.G[T](db, opts...),
+    }
+}
+
+type QueryInterface[T any] interface {
+    gorm.Interface[T]
+    GetByID(id int) (T, error)
+    FilterByNameAndAge(name string, age int)
+}
+
+type QueryImpl[T any] struct {
+    gorm.Interface[T]
+}
+
+func (q QueryImpl[T]) GetByID(id int) (T, error) {
+    return q.Exec(ctx, "SELECT * FROM @@table WHERE id=@id", id)
+}
+```
+
+### Generics Are the Key
+
+By using generics (available from Go 1.18+), the generated APIs stay:
+
+- Fully type-safe for your models
+- Compatible with GORM’s generic query APIs like `gorm.G[T]` and `gorm.Interface[T]`
+
+This removes any boilerplate type assertions and lets you write fluent queries returning concrete model types.
+
+### Generated Field Helpers Map to GORM Clauses
+
+The model-driven generation produces strongly typed field helpers (e.g., `User.Name.Eq("jinzhu")`), each producing **GORM clause expressions**. You can pass these directly into any GORM chain:
+
+```go
+gorm.G[User](db).Where(generated.User.Name.Eq("alice")).Find(ctx)
+```
+
+This composes into GORM’s underlying SQL builders seamlessly, respecting the involved database dialect and encoding.
+
+### Associations Are Fully Integrated
+
+The generated association helpers wrap GORM’s association interface with type safety. Operations like `Create`, `Unlink`, `Delete` on associations like has-many or many-to-many are generated as methods that manipulate foreign keys or join tables according to GORM semantics.
+
+Example:
+
+```go
+gorm.G[User](db).
+  Set(generated.User.Pets.Create(generated.Pet.Name.Set("fido"))).
+  Create(ctx)
+```
+
+These helpers communicate directly with GORM’s runtime methods like `Create` and `Association`, so you get the full power of GORM while retaining static guarantees.
+
+---
+
+## How the Generated Code Uses GORM Runtime
+
+### Wrapping `gorm.G[T]` and `gorm.Interface[T]`
+
+The generator builds your query interfaces on top of the generic function `gorm.G[T](db)` which returns `gorm.Interface[T]`. This interface is the central abstraction in GORM v2 for building queries using generics:
+
+- Your generated types embed `gorm.Interface[T]`
+- Generated methods either build on or finalize queries using it
+
+This layering ensures:
+
+- Reuse of core GORM query building
+- Extension with your custom SQL template methods
+- Consistent chaining of query builders and result processing
+
+### Generated Methods Categorization
+
+- **Finish Methods:** Execute finalizing queries returning results. They translate embedded SQL templates into query strings and call low-level `Exec` or `Raw().Scan()` methods of `gorm.Interface[T]`.
+- **Chain Methods:** Methods that continue query composition by calling `Where`, `Select`, etc., returning the generated interface type for chained calls.
+
+This means generated code aligns perfectly with GORM idioms.
+
+### Field and Association Helpers Construct `clause.Expression`
+
+The generated field helpers produce expressions (e.g., `Eq`, `Gt`, `IsNull`) compatible with GORM’s clause expression system. These expressions:
+
+- Integrate smoothly with `Where`, `Set`, and other GORM clauses
+- Support complex SQL dialect differences transparently
+
+---
+
+## Customizing and Extending Integration
+
+GORM CLI generation respects per-package `genconfig.Config` settings allowing you to customize:
+
+- Output locations
+- Field helper mappings for custom Go types
+- Inclusion or exclusion of interfaces and structs
+
+### Extending with Custom Field Helpers
+
+You can map custom Go types to your own field helpers (e.g., JSON columns) that produce dialect-aware SQL expressions. This lets you extend generated code’s integration with GORM’s runtime for your domain needs.
+
+### Overriding or Adding Methods
+
+Because the generated query interfaces embed `gorm.Interface[T]`, you can assign the implementation struct to variables of `gorm.Interface[T]` type and compose or extend methods if needed, leveraging the underlying GORM query engine.
+
+### Practical Tip
+
+When debugging or extending generated methods, remember the generated code acts as a **type-safe wrapper** around the existing fluent GORM API. Reviewing `gorm.Interface[T]` and `gorm.G[T]` documentation and source clarifies expected runtime behaviors.
+
+---
+
+## Typical User Flow Involving Integration
+
+<Steps>
+<Step title="Define SQL-Templated Interfaces and Models">
+Write interfaces with embedded SQL templates and model structs including tags for associations.
+</Step>
+<Step title="Run Code Generation">
+Run `gorm gen -i ./input -o ./generated` to produce query interfaces and field helpers relying on GORM generics.
+</Step>
+<Step title="Use Generated APIs">
+Use `generated.Query[User](db)` which returns a wrapper over `gorm.G[User](db)` with your query methods.
+</Step>
+<Step title="Compose Fluent Queries">
+Chain generated field helpers and methods directly into GORM queries, confident of static safety.
+</Step>
+<Step title="Extend or Customize">
+Optionally customize or extend generated code by configuring `genconfig.Config` or composing with raw GORM calls.
+</Step>
+</Steps>
+
+---
+
+## Troubleshooting Common Integration Issues
+
+<AccordionGroup title="Integration Troubleshooting">
+<Accordion title="Generated Code Doesn't Compile with Older Go Versions">
+Ensure your Go version is 1.18 or later to support generics, as generated code depends on them.
+</Accordion>
+<Accordion title="Methods Missing or Not Appearing as Expected">
+Review your interface SQL templates for syntax errors or missing documentation comments which drive code generation.
+Also, check `genconfig.Config` filters aren’t excluding your interfaces.
+</Accordion>
+<Accordion title="GORM Queries Not Executing as Intended">
+Confirm that your use of field helpers aligns with GORM clause expectations and that your `*gorm.DB` instance is correctly passed through generated APIs.
+Ensure context passing is consistent.
+</Accordion>
+<Accordion title="Custom Field Helpers Are Not Mapped Correctly">
+Verify `genconfig.Config` mapping rules and tags are properly declared. Regenerate code after each config change.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Mermaid Diagram: Integration Overview
+
+```mermaid
+flowchart TD
+
+    %% Entities
+    subgraph "User Code"
+      InterfaceDef["User Query Interface\n(defines SQL templates)"]
+      Models["User Model Structs"]
+      Config["genconfig.Config\n(customization)"]
+    end
+
+    subgraph "Generation Layer"
+      Generator["GORM CLI Generator\n(private gen package)"]
+      TemplateEngine["Template Renderer\nfor SQL DSL"]
+      GeneratedCode["Generated Code\n(Query Interfaces, Field Helpers)"]
+    end
+
+    subgraph "GORM Runtime"
+      GORMG[T generic function\n'gorm.G[T](db)']
+      GORMInterface["gorm.Interface[T]\n(core fluent API)"]
+      ClauseExpr["clause.Expression helpers\n(field, association helpers)"]
+      DBInstance["*gorm.DB instance"]
+    end
+
+    %% Relationships
+    InterfaceDef -->|Input| Generator
+    Models -->|Input| Generator
+    Config -->|Input| Generator
+
+    Generator -->|Produces| GeneratedCode
+    Generator -->|Uses| TemplateEngine
+
+    GeneratedCode -->|Uses wraps| GORMG
+    GORMG --> GORMInterface
+    GeneratedCode -->|Embeds| GORMInterface
+
+    GeneratedCode -->|Creates| ClauseExpr
+    ClauseExpr -->|Consumes| GORMInterface
+    GORMInterface -->|Operates on| DBInstance
+
+    %% Styling
+    classDef external fill:#f9f,stroke:#333,stroke-width:1px;
+    class User Code external;
+    class Generation Layer external;
+    class GORM Runtime external;
+```
+
+---
+
+## Summary
+
+This page detailed the integration mechanism between GORM CLI generated code and the GORM runtime, explaining how generics enable seamless wrapping of `gorm.Interface[T]` with your typed query interfaces and how generated field helpers map to GORM clause expressions. Understanding this integration empowers you to fully leverage your generated APIs with confidence and customize them when necessary.
+
+---
+
+## Next Steps
+
+- Explore [Template-Based Query APIs](/guides/core-workflows/template-based-queries) to master SQL template writing and generated method usage.
+- Learn about [Managing Associations in Generated Code](/guides/core-workflows/associations-in-depth) to operate on related records safely.
+- Review [Customizing Generation with genconfig](/guides/advanced-usage/customizing-generation) for tailored field mapping and output control.
+- Consult [Understanding the Generated Code](/guides/getting-started/understanding-generated-code) for practical examples on generated helper usage.
+
+---
+
+For foundational understanding, revisit the [System Architecture & Data Flow](/overview/core-concepts/system-architecture) page to see how integration fits into the whole generation pipeline.
+
+
+---
+
+## Practical Example Recap
+
+```go
+// Using generated APIs wraps gorm.G[T] internally
+u, err := generated.Query[User](db).GetByID(ctx, 123)
+
+// Filtering with generated field helpers integrates with GORM's Where clause
+users, err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("alice"), generated.User.Age.Gt(20)).
+  Find(ctx)
+
+// Association creation, update, unlink, and delete all respect GORM semantics
+err = gorm.G[User](db).
+  Set(generated.User.Pets.Create(generated.Pet.Name.Set("fido"))).
+  Create(ctx)
+```
+
+---
+
+This integration design ensures productivity, type safety, and clear extension pathways for your database access layer using GORM CLI together with GORM core.
