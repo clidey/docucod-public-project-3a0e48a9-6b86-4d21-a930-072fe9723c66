@@ -1,0 +1,192 @@
+---
+title: "Core Concepts & Terminology"
+description: "Master GORM CLI’s vocabulary: understand queries driven by Go interfaces with SQL templates, model-driven field helpers, associations, predicates, and template DSL. These concepts are foundational to effective use and troubleshooting."
+---
+
+# Core Concepts & Terminology
+
+Understanding GORM CLI’s foundational vocabulary is key to mastering its powerful type-safe query generation and model-driven helpers. This page introduces the essential concepts, featuring how Go interfaces paired with SQL templates, model-driven field helpers, associations, predicates, and the template DSL combine to deliver compile-time safety and expressive database interactions.
+
+---
+
+## What You Will Learn
+
+- How **interface-driven queries** leverage Go generics and SQL templates
+- The role of **model-driven field helpers** for filters, updates, and associations
+- Common **association types** and their operation semantics
+- Core **predicates** for building expressive and safe queries
+- Overview of the **template DSL** syntax to write dynamic queries
+
+---
+
+## Interface-Driven Queries: Defining Behavior Through Go Interfaces
+
+At the heart of GORM CLI is the ability to define your data access through **Go generic interfaces**. Each interface method includes an embedded SQL template that tightly couples query logic with type-safe method signatures.
+
+For example, a simple interface might look like this:
+
+```go
+// Query interface for generic type T
+// Methods include SQL embedded in comments
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // Complex conditional WHERE with struct fields
+  QueryWith(user models.User) (T, error)
+}
+```
+
+### Why Interfaces?
+
+- Interfaces define **what** queries you want, leaving GORM CLI to generate **how**.
+- Using generics and interfaces lets you reuse interfaces across different models.
+- Embedded SQL templates provide full control over query logic with strong parameter safety.
+
+### Practical Tip
+
+Write your interfaces close to your models for easy maintenance. Use clear method names and document SQL templates thoroughly to ease comprehension and generation.
+
+---
+
+## Model-Driven Field Helpers: Fluent, Discoverable Query Filters
+
+From your Go model structs, GORM CLI generates **field helpers** that provide strongly typed predicates and setters to build filters, ordering, and updates fluently.
+
+Consider this model:
+
+```go
+// User model
+type User struct {
+  gorm.Model
+  Name    string
+  Age     int
+  Role    string
+  IsAdult bool `gorm:"column:is_adult"`
+}
+```
+
+GORM CLI will generate helpers like:
+
+```go
+generated.User.Name.Eq("jinzhu")      // name = 'jinzhu'
+generated.User.Age.Gt(18)               // age > 18
+generated.User.IsAdult.Set(true)       // set is_adult = true
+```
+
+### Benefits
+
+- **Compile-time safety**: No magic strings or runtime type errors.
+- **Readability**: Intuitive fluent API that guides correct usage.
+- **Composability**: Combine predicates easily using GORM’s chaining support.
+
+### Best Practices
+
+- Use field helpers for all filters and updates rather than raw SQL strings.
+- Customize field helpers if needed for complex types like JSON (see Custom Field Helper docs).
+- Associate behaviors like `Create`, `Unlink`, `Delete` are available for related models.
+
+---
+
+## Association Types: Understanding Your Model Relationships
+
+GORM CLI maps your model associations into helpers that correspond to the relationship and operation types. Familiarity with these semantics empowers precise data manipulation.
+
+| Association Type | Description                                                      | Unlink Behavior                           | Delete Behavior                            |
+|------------------|------------------------------------------------------------------|------------------------------------------|--------------------------------------------|
+| **Belongs To**   | Parent relation (e.g., User belongs to Company)                  | Sets parent foreign key to NULL           | Deletes associated parent rows             |
+| **Has One**      | One-to-one owned child (e.g., User has one Account)             | Sets child foreign key to NULL             | Deletes associated child rows               |
+| **Has Many**     | Multiple owned children (e.g., User has many Pets)              | Sets child foreign keys to NULL            | Deletes child rows                          |
+| **Many2Many**    | Join via table, many-to-many (e.g., Users speak many Languages) | Removes join rows only, parents remain     | Removes join rows only                      |
+
+### Operations Supported
+
+- **Create**: Insert and link related records
+- **Update**: Update related records conditionally
+- **Unlink**: Remove association without deleting records
+- **Delete**: Delete related records or join rows
+- **CreateInBatch**: Efficient batch linking for collections
+
+### Example Snippet
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")), // Create new pet and associate
+  ).
+  Create(ctx)
+```
+
+---
+
+## Predicates: Building Blocks of Query Expressions
+
+Predicate helpers generated for every basic field provide expressive querying capabilities. Common predicates include:
+
+| Predicate    | Purpose                                        | Example Usage                      |
+|--------------|------------------------------------------------|----------------------------------|
+| `Eq`        | Equal to a value                                | `Name.Eq("jinzhu")`             |
+| `Neq`       | Not equal to                                    | `Age.Neq(30)`                    |
+| `Gt`        | Greater than                                    | `Age.Gt(18)`                    |
+| `Lt`        | Less than                                       | `Age.Lt(65)`                    |
+| `Between`   | Value in range                                  | `Age.Between(18, 65)`             |
+| `IsNull`    | Checks for SQL NULL                             | `Score.IsNull()`                |
+| `Like`      | Pattern matching (SQL LIKE)                     | `Role.Like("%admin%")`          |
+
+### Custom Predicates
+
+You can implement helpers for complex types like JSON fields using custom predicates with database-specific SQL generation.
+
+---
+
+## Template DSL: Writing Dynamic, Safe SQL Queries
+
+GORM CLI enables robust dynamic queries using a template DSL embedded in interface method comments.
+
+Key directives:
+
+| Directive   | Purpose                                    | Example                                      |
+|-------------|--------------------------------------------|----------------------------------------------|
+| `@@table`   | Resolves to the model’s table name         | `SELECT * FROM @@table WHERE id=@id`         |
+| `@@column`  | Dynamic column name binding                 | `WHERE @@column=@value`                       |
+| `@param`    | Maps Go function parameters safely         | `WHERE name=@user.Name`                       |
+| `{{where}}` | Conditional WHERE clause block              | `{{where}} age > 18 {{end}}`                  |
+| `{{set}}`   | Conditional UPDATE SET clause block         | `{{set}} name=@name {{end}}`                   |
+| `{{if}}`    | Conditional SQL fragment                     | `{{if age > 0}} AND age=@age {{end}}`        |
+| `{{for}}`   | Iteration over collections                   | `{{for _, tag := range tags}} ... {{end}}`   |
+
+### Example: Conditional Query
+
+```sql
+SELECT * FROM @@table
+{{where}}
+  {{if user.ID > 0}} WHERE id=@user.ID {{else if user.Name != ""}} WHERE name=@user.Name {{end}}
+{{end}}
+```
+
+This flexibility lets you express complex query logic while preserving strong parameter safety.
+
+---
+
+## Troubleshooting Tips & Common Pitfalls
+
+- **Missing context.Context parameter:** The generator automatically injects this if omitted—no additional user action required.
+- **Incorrect placeholder names:** Make sure Go parameter names map exactly to placeholders prefixed with `@`.
+- **Unmapped custom types:** Configure field type maps in `genconfig.Config` to support types like `sql.NullTime`.
+- **Association misuse:** Confirm correct association type semantics; unlink vs delete semantics often cause unexpected behavior.
+- **Dynamic SQL syntax errors:** Use the DSL carefully; incorrect nesting of `{{if}}` or `{{for}}` blocks can break code generation.
+
+---
+
+## Next Steps
+
+- Explore [What is GORM CLI?](../product-intro-core-concepts/what-is-gorm-cli) to understand the broader product context.
+- Dive into the [Template DSL guide](../advanced-patterns/templating-dsl) to master writing robust query templates.
+- Start a hands-on journey with [Preparing Models & Query Interfaces](../../getting-started/first-codegen-workflow/prepare-models-interfaces).
+
+---
