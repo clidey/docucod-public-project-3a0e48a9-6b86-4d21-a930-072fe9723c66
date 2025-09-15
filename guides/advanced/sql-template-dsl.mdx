@@ -1,0 +1,305 @@
+---
+title: "Mastering the SQL Template DSL"
+description: "Explains the SQL templating capabilities for custom queries, including the supported directives, dynamic filtering, and safe parameter injection. Offers examples and patterns for leveraging the template language to create flexible, maintainable data access code."
+---
+
+# Mastering the SQL Template DSL
+
+GORM CLI empowers you to write custom SQL queries declaratively within Go interfaces using a robust SQL Template Domain-Specific Language (DSL). This guide walks you through gaining mastery of the SQL templating features, including supported directives, dynamic filtering, and safe parameter insertion. By leveraging this DSL, you will build flexible, maintainable, and type-safe data access methods that seamlessly integrate with generated code.
+
+---
+
+## 1. Understanding the SQL Template DSL
+
+### What This Guide Helps You Accomplish
+
+This guide focuses specifically on GORM CLI's SQL Template DSL — a templating language embedded in Go interface method comments that enables:
+
+- Writing rich SQL queries with dynamic conditions
+- Safely injecting parameters directly from Go method arguments
+- Composing queries with conditional clauses and iterative filters
+- Utilizing placeholder directives for automatic table and column naming
+
+You will learn how to structure your query interface methods using the DSL and understand the behavior of the supported directives.
+
+### Prerequisites
+
+- Basic knowledge of Go interfaces and method declarations
+- Familiarity with SQL query structure (SELECT, WHERE, UPDATE)
+- GORM CLI installed and set up in your Go project (see [Installing GORM CLI](https://gorm.io/cli/gorm/installation))
+- Defined model structs and initial code generation done (see [Setting Up Your Project](https://gorm.io/cli/gorm/project-setup))
+
+### Expected Outcome
+
+By completing this guide, you will be able to:
+
+- Define query interface methods embedding SQL templates using the DSL
+- Write dynamic, conditional SQL queries that adapt to runtime parameters
+- Ensure parameter bindings are type-safe and secure
+- Integrate templated queries into your generated, type-safe GORM APIs
+
+### Time Estimate
+
+About 20-30 minutes to read and practice example patterns
+
+### Difficulty Level
+
+Intermediate — requires understanding of SQL and Go generics.
+
+---
+
+## 2. Core Principles of the SQL Template DSL
+
+### Supported Placeholders and Directives
+
+| Directive    | Purpose                              | Usage Example                                   |
+| ------------ | ------------------------------------ | ----------------------------------------------- |
+| `@@table`    | Resolves to current model's table name | `SELECT * FROM @@table WHERE id=@id`             |
+| `@@column`   | Resolves dynamically to a column name | `@@column=@value`                                |
+| `@param`     | Maps Go method parameters to SQL parameters | `WHERE name=@user.Name AND age=@user.Age`          |
+| `{{where}}`  | Block for conditional WHERE clauses    | `{{where}} {{if age>0}} age>@age {{end}} {{end}}`  |
+| `{{set}}`    | Block for conditional SET clauses (UPDATE) | `{{set}} {{if user.Name!=""}} name=@user.Name, {{end}} {{end}}` |
+| `{{if}}`     | Conditional SQL fragments              | `{{if isActive}} AND active=1 {{end}}`           |
+| `{{for}}`    | Iteration over slices or collections   | `{{for _, tag := range tags}} tags LIKE concat('%',@tag,'%') OR {{end}}` |
+
+### Key Concepts
+
+- **Safe parameter injection**: Using `@param` placeholder automatically escapes and binds Go method arguments as SQL parameters, preventing injection attacks.
+- **Dynamic SQL construction**: Use conditional and loop directives to build complex SQL only including relevant filters.
+- **Automatic resolution**: Special placeholders like `@@table` and `@@column` map to actual table and column names using model metadata.
+
+---
+
+## 3. Writing Queries with the Template DSL
+
+### Step-by-Step Workflow
+
+<Steps>
+<Step title="Define Your Query Interface Method">
+Write a Go interface method with a comment block containing the SQL template. Example:
+```go
+// SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (T, error)
+```
+This defines a method to fetch a record by `id` with safe parameter mapping.
+</Step>
+<Step title="Embed SQL Template with Placeholders">
+Use placeholders to reference table names (`@@table`), dynamic columns (`@@column`), and bind method arguments (`@param`).
+
+Example:
+```go
+// SELECT * FROM @@table WHERE @@column=@value
+FilterWithColumn(column string, value string) (T, error)
+```
+</Step>
+<Step title="Use Conditional Blocks for Dynamic Filtering">
+Enclose WHERE clauses in `{{where}}` to add conditions dynamically based on parameter values.
+
+Example:
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{if user.Name != ""}} name=@user.Name {{end}}
+//   {{if user.Age > 0}} AND age=@user.Age {{end}}
+// {{end}}
+SearchUsers(user User) ([]T, error)
+```
+</Step>
+<Step title="Define Conditional UPDATE SET Clauses">
+Use the `{{set}}` block to conditionally include SET columns in UPDATE queries.
+
+Example:
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age, {{end}}
+//   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+</Step>
+<Step title="Use Iteration for Complex Filters">
+Leverage the `{{for}}` directive to iterate over collections.
+
+Example:
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{for _, user := range users}}
+//     {{if user.Name != "" && user.Age > 0}}
+//       (name=@user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+//     {{end}}
+//   {{end}}
+// {{end}}
+Filter(users []User) ([]T, error)
+```
+</Step>
+</Steps>
+
+### How to Use the Generated Methods
+
+Invoke the generated query methods with your parameters. These methods internally build and execute the SQL.
+
+Example:
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+users, err := generated.Query[User](db).FilterByNameAndAge("jinzhu", 25).Find(ctx)
+err := generated.Query[User](db).UpdateUser(ctx, User{Name: "jinzhu", Age: 20}, 1)
+```
+
+---
+
+## 4. Practical Examples and Patterns
+
+### Example 1: Simple Parameter Binding
+
+```go
+// SELECT * FROM @@table WHERE id=@id AND status=@status
+GetByIDWithStatus(id int, status string) (T, error)
+```
+
+This method fetches a record filtered by id and status, binding both parameters safely.
+
+### Example 2: Conditional WHERE Clause with Multiple Fields
+
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{if name != ""}} name=@name {{end}}
+//   {{if age > 0}} AND age=@age {{end}}
+// {{end}}
+FindUsers(name string, age int) ([]T, error)
+```
+
+Generates a flexible WHERE clause including only non-empty filters.
+
+### Example 3: Dynamic UPDATE with Conditional SET
+
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Email != ""}} email=@user.Email {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+
+Updates only the fields provided in the `user` struct, skipping empty values.
+
+### Example 4: Iterating Over Multiple Filters
+
+```go
+// SELECT * FROM @@table
+// {{where}}
+//   {{for _, tag := range tags}}
+//     {{if tag != ""}} tags LIKE concat("%",@tag,"%") OR {{end}}
+//   {{end}}
+// {{end}}
+FilterByTags(tags []string) ([]T, error)
+```
+
+Builds a WHERE clause by OR-combining partial matches for each non-empty tag.
+
+---
+
+## 5. Best Practices and Tips
+
+- Always use `@@table` and `@@column` for referencing tables and columns dynamically to ensure correct naming.
+- Use `{{where}}` and `{{set}}` blocks to avoid malformed SQL when filtering or updating optionally present fields.
+- Escape `@` symbols with `\@` when you want to include literal `@` characters in SQL strings.
+- Define interface methods with proper return values: 
+  - Methods that perform SELECT typically return `(T, error)` or `([]T, error)`.
+  - Methods that perform UPDATE or other exec operations return `error` only.
+- Always include `context.Context` in method params (GORM CLI auto-injects it if missing).
+- Use iteration (`{{for}}`) to handle variable-length conditions, e.g., filtering on slice inputs.
+
+---
+
+## 6. Common Pitfalls and Troubleshooting
+
+<AccordionGroup title="Common Issues with SQL Template DSL">
+<Accordion title="Unclosed Template Blocks or Syntax Errors">
+Check your `{{if}}`, `{{for}}`, and `{{end}}` directives carefully. Each open directive must have a matching `{{end}}`. Use gofmt or the provided generator error messages for line numbers.
+</Accordion>
+<Accordion title="Empty WHERE or SET Clause Leading to Invalid SQL">
+Wrap optional WHERE and SET conditions using `{{where}}` and `{{set}}` blocks to avoid generating empty or dangling clauses.
+</Accordion>
+<Accordion title="Parameter Binding Errors or Mismatches">
+Ensure that your Go method parameters match the placeholders used in SQL templates (`@param` must correspond to a method argument).
+</Accordion>
+<Accordion title="Using Literal @ Signs in SQL Causes Parsing Issues">
+Escape literal `@` signs as `\@` to prevent them from being treated as parameters.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 7. Advanced Usage and Configuration
+
+### Using genconfig.Config for Template Behavior
+
+You can customize SQL template code generation by defining a `genconfig.Config` variable inside your package, controlling things like output paths, field type mappings, and included interfaces.
+
+Example:
+```go
+var _ = genconfig.Config{
+    OutPath: "examples/output",
+    IncludeInterfaces: []any{"Query*"},
+}
+```
+
+### Custom Field Type Mapping
+
+For complex fields that require special SQL generation (e.g., JSON fields), configure custom field helpers via `FieldNameMap` and `FieldTypeMap`.
+
+### Additional Resources
+
+- See the [examples/query.go](https://github.com/go-gorm/cli/blob/main/examples/query.go) file for a realistic annotated example of a full SQL template interface.
+- Review the [internal/gen/sqlparser.go](https://github.com/go-gorm/cli/blob/main/internal/gen/sqlparser.go) for how templates are parsed and rendered internally.
+
+---
+
+## 8. Next Steps
+
+- Apply this knowledge by creating your own query interfaces with embedded SQL templates.
+- Explore the [Building Queries with Generated APIs](https://gorm.io/cli/guides/core-patterns/building-queries) guide to see how these templates integrate into the generated fluent query APIs.
+- Learn to use [Field Helpers](https://gorm.io/cli/guides/core-patterns/using-field-helpers) alongside templated queries for filtering and updates.
+- For deep customization, check out [Customizing Code Generation](https://gorm.io/cli/guides/advanced/customizing-generation).
+
+---
+
+Happy coding with GORM CLI's powerful SQL Template DSL!
+
+---
+
+## Appendix: SQL Template DSL Example Snippet
+
+```go
+// Query interface example snippet
+interface Query[T any] {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateUser(user User, id int) error
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //  {{if name != ""}} name=@name {{end}}
+  //  {{if age > 0}} AND age=@age {{end}}
+  // {{end}}
+  FilterByNameAndAge(name string, age int) ([]T, error)
+}
+```
+
+
+---
+
