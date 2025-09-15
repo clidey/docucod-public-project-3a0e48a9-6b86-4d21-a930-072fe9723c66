@@ -1,0 +1,275 @@
+---
+title: "Advanced Field Helper Configuration"
+description: "Guides users through customizing field helper generation, including type mapping, struct tags, and custom helpers (like JSON). Illustrates leveraging genconfig.Config for project-wide or fine-grained control over output and field behavior."
+---
+
+# Advanced Field Helper Configuration
+
+Customize how GORM CLI generates field helpers for your Go models by adjusting field type mappings, struct tag associations, and custom helpers such as JSON. This guide walks you through the usage of the `genconfig.Config` struct to gain fine-grained or project-wide control over output locations, field behavior, and code generation filtering.
+
+---
+
+## 1. What This Guide Helps You Achieve
+
+- Tailor field helper generation to match your project's coding conventions or special data types
+- Map Go types or struct tag names to specific field helpers to extend functionality
+- Control output folder paths and limit code generation scope to particular structs or interfaces
+- Implement custom helpers (e.g., JSON) that integrate seamlessly with GORM CLI's code generation
+
+### Prerequisites
+
+- Basic familiarity with GORM CLI and its code generation workflow
+- Existing Go model structs you want to generate field helpers for
+- Understanding of Go struct tags and types
+
+### Expected Outcome
+
+After completing this guide, you will have configured your code generation to:
+
+- Use tailored field helper types for specific Go types or struct tag names
+- Generate output files in desired directories
+- Filter which structs and interfaces are processed
+- Apply custom field helpers like JSON with database-aware SQL generation
+
+### Time Estimate
+
+Approximately 15–30 minutes, depending on customization complexity and project size.
+
+### Difficulty Level
+
+Intermediate
+
+---
+
+## 2. Step-by-Step Configuration Instructions
+
+### Step 1: Declare the `genconfig.Config` in Your Package
+
+Create a package-level variable using the `genconfig.Config` struct. This variable will be automatically detected by the GORM CLI generator to adjust generation behavior for files in the package.
+
+```go
+package examples
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    // Customize where generated files are saved
+    OutPath: "examples/output",
+
+    // Map specific Go types to desired field helper wrappers
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+
+    // Map struct tags (from `gen:"tag"`) to field helpers
+    FieldNameMap: map[string]any{
+        "date": field.Time{},    // For fields tagged with gen:"date"
+        "json": JSON{},         // Custom JSON helper (see later section)
+    },
+
+    // Control generation scope
+    IncludeInterfaces: []any{"Query*"},      // Only include interfaces starting with "Query"
+    ExcludeInterfaces: []any{"*Deprecated*"}, // Exclude deprecated interfaces
+    IncludeStructs: []any{"User", "Account*"}, // Only include these structs
+    ExcludeStructs: []any{"*DTO"},            // Exclude DTO structs
+
+    // Apply configuration globally or just per file
+    FileLevel: false, // false: applies to whole package; true: file-only
+}
+```
+
+---
+
+### Step 2: Map Struct Tags to Custom Helpers
+
+Use the `FieldNameMap` to connect struct fields tagged with `gen:"tagname"` to their respective helper types. This is how you tell the generator to treat fields differently based on the tag you add.
+
+Example struct with a JSON tag:
+
+```go
+package models
+
+type User struct {
+    ID      uint
+    Name    string
+    Profile string `gen:"json"` // Customize generation for this field
+}
+```
+
+When you include the `gen:"json"` tag, and have configured `FieldNameMap: map[string]any{"json": JSON{}}`, the generator produces JSON-aware helpers specifically for this field.
+
+---
+
+### Step 3: Define Custom Helpers like JSON
+
+To fully use custom helpers (e.g., a JSON field type), define their Go types with methods implementing SQL generation that adapts to database dialects.
+
+For example, the JSON helper can generate different SQL expressions depending on whether GORM is working with MySQL, SQLite, or PostgreSQL.
+
+```go
+// JSON is a custom field helper type for JSON columns
+// It provides methods for JSON-aware query expressions that differ per database dialect.
+type JSON struct{ column clause.Column }
+
+func (j JSON) WithColumn(name string) JSON {
+    c := j.column
+    c.Name = name
+    return JSON{column: c}
+}
+
+// Equal builds a JSON query expression
+func (j JSON) Equal(path string, value any) clause.Expression {
+    return jsonEqualExpr{col: j.column, path: path, val: value}
+}
+
+type jsonEqualExpr struct {
+    col  clause.Column
+    path string
+    val  any
+}
+
+func (e jsonEqualExpr) Build(builder clause.Builder) {
+    if stmt, ok := builder.(*gorm.Statement); ok {
+        switch stmt.Dialector.Name() {
+        case "mysql":
+            v, _ := json.Marshal(e.val)
+            clause.Expr{SQL: "JSON_EXTRACT(?, ?) = CAST(? AS JSON)", Vars: []any{e.col, e.path, string(v)}}.Build(builder)
+        case "sqlite":
+            clause.Expr{SQL: "json_valid(?) AND json_extract(?, ?) = ?", Vars: []any{e.col, e.col, e.path, e.val}}.Build(builder)
+        default: // PostgreSQL and others
+            clause.Expr{SQL: "jsonb_extract_path_text(?, ?) = ?", Vars: []any{e.col, e.path[2:], e.val}}.Build(builder)
+        }
+    }
+}
+```
+
+> The JSON helper example above is reusable with your `FieldNameMap` to enable the generator to create type-safe JSON query helpers for any struct fields tagged with `gen:"json"`.
+
+---
+
+### Step 4: Apply Filtering and File-Level Overrides
+
+- Use `IncludeInterfaces` and `ExcludeInterfaces` to whitelist or blacklist interface types by name patterns.
+- Use `IncludeStructs` and `ExcludeStructs` similarly for struct types.
+- The `FileLevel` boolean controls whether the configuration applies only to the individual file (`true`) or the entire package subtree (`false`).
+
+---
+
+### Step 5: Run GORM CLI Generator
+
+After configuring, execute the CLI to regenerate code with your customizations applied:
+
+```bash
+gorm gen -i ./your_package_path -o ./your_output_dir
+```
+
+This processes interfaces and structs in your project according to your configuration, producing field helpers and query code that reflect your mappings and filters.
+
+---
+
+## 3. Examples
+
+### Mapping a SQL NullTime Type and Custom JSON Field
+
+```go
+var _ = genconfig.Config{
+    OutPath: "examples/output",
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},    // Convert sql.NullTime fields to field.Time helper
+    },
+    FieldNameMap: map[string]any{
+        "json": JSON{},   // Use JSON helper for fields tagged with gen:"json"
+    },
+}
+```
+
+Model definition:
+
+```go
+type User struct {
+    ID        uint
+    CreatedAt sql.NullTime
+    Profile   string `gen:"json"`
+}
+```
+
+Generated helpers will use `field.Time` for `CreatedAt` and the custom `JSON` helper for `Profile`.
+
+
+### Filtering Structs by Pattern
+
+Configure to include only structs starting with `Account` and exclude DTO suffixed structs:
+
+```go
+var _ = genconfig.Config{
+    IncludeStructs: []any{"Account*"},
+    ExcludeStructs: []any{"*DTO"},
+}
+```
+
+Only `Account` prefixed structs without DTO suffix will have helpers generated.
+
+---
+
+## 4. Troubleshooting & Best Practices
+
+<AccordionGroup title="Common Issues and Tips">
+<Accordion title="Field Mappings Not Applied">
+Ensure your `genconfig.Config` is declared in the package where your models or interfaces live. The CLI detects them automatically but only if defined at package scope.
+</Accordion>
+<Accordion title="Custom Helper Methods Not Called">
+Verify your custom helper type implements expected methods, like `WithColumn(string)` and SQL expression builders. Any missing method may lead the generator to fallback to default helpers.
+</Accordion>
+<Accordion title="Generation Scope Unexpectedly Includes/Excludes Types">
+Confirm your patterns for includes/excludes match exactly the struct/interface names or their package-qualified forms. Use shell-style patterns (e.g., `Query*`, `*Deprecated*`).
+</Accordion>
+<Accordion title="Output Path Not Respected">
+Check `OutPath` in your config is correctly set relative to your working directory. Also verify `/` separators are consistent in paths.
+</Accordion>
+</AccordionGroup>
+
+### Best Practices
+
+- Prefer scoped, package-level `genconfig.Config` for predictable application.
+- Use `FieldNameMap` for gen-tag-driven mapping to avoid invasive type mapping.
+- Use descriptive and unique gen tags (e.g., `json`, `date`) to clearly trigger custom helpers.
+- Test generated code in a small package first to validate mappings and outputs.
+
+---
+
+## 5. Next Steps & Related Content
+
+- **Explore Template-Based Query APIs**: Learn how to construct interface-driven SQL query methods with templates for advanced querying.
+- **Understand Model-Driven Field Helpers**: Deepen knowledge on using generated field helpers effectively in your GORM queries.
+- **Working with Associations**: Manage complex data relationships using association helpers.
+- **Configuration & Customization Essentials**: Broader overview of GORM CLI's config options.
+
+---
+
+## References
+
+- [genconfig.Config Struct Source](https://github.com/go-gorm/cli/blob/main/genconfig/config.go)
+- [Example JSON Field Helper](https://github.com/go-gorm/cli/blob/main/examples/query.go#L50)
+- [GORM CLI README](https://github.com/go-gorm/cli/blob/main/README.md) - High-level experience with generation and usage
+
+---
+
+## Summary Diagram of Field Helper Customization Flow
+
+```mermaid
+flowchart TD
+    Start["Start: Define genconfig.Config"] --> SetOutPath
+    SetOutPath["Set OutPath for generated files"] --> MapTypes
+    MapTypes["Map Go types in FieldTypeMap"] --> MapTags
+    MapTags["Map gen:" tags in FieldNameMap"] --> DeclareHelpers
+    DeclareHelpers["Declare custom helper types (e.g., JSON)"] --> ApplyFilters
+    ApplyFilters["Configure Include/Exclude filters and FileLevel"] --> GenerateCode
+    GenerateCode["Run 'gorm gen' CLI with config applied"] --> Result["Generated code with customized helpers"]
+
+    classDef startend fill:#bbf,stroke:#333,stroke-width:1px,color:#000
+    class Start,Result startend
+```
