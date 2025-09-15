@@ -1,0 +1,230 @@
+---
+title: "Avoiding Common Pitfalls and Troubleshooting"
+description: "Guidance on common mistakes, error messages, and diagnostic steps to quickly resolve generation or usage issues. Best practices for structuring models, interfaces, and ensuring the generator discovers your code."
+---
+
+# Avoiding Common Pitfalls and Troubleshooting
+
+This guide provides practical solutions to the typical issues users face when generating or using code with GORM CLI. You will learn how to structure your models and interfaces correctly, recognize common error messages, and apply diagnostic steps for swift resolution. Following best practices outlined here ensures the code generator recognizes your source code and produces valid, type-safe query APIs and field helpers.
+
+---
+
+## 1. Understanding Common Pitfalls
+
+### 1.1 Model and Interface Discovery Issues
+
+The generator relies on properly structured Go source files with well-defined models and interfaces. Common mistakes that prevent the generator from detecting or generating code include:
+
+- **Missing Exported Types:** Ensure all structs and interfaces you want to generate code for are exported (start with uppercase letter).
+- **Incorrect Directory or Input Path:** Run the generator with the correct input path pointing to the directory or file containing your interfaces and models.
+- **Lack of Package-Level Config or Inclusion Filters:** If using `genconfig.Config` filters (`IncludeInterfaces`, `ExcludeInterfaces`, `IncludeStructs`, `ExcludeStructs`), ensure your interface and struct names match the configured patterns exactly.
+
+<Tip>
+Always verify your input path contains the interfaces you want to generate from and your models are properly defined in the same package scope or a recognized import path.
+</Tip>
+
+### 1.2 SQL Template Syntax Errors
+
+Errors in the SQL templating syntax inside interface method comments will cause generation failures or invalid code. Common mistakes include:
+
+- Missing closing `{{end}}` for template blocks.
+- Incorrect parameter bindings (ensure parameters in method signatures match the `@param` placeholders).
+- Using unsupported SQL template directives or malformed expressions.
+
+<Warning>
+Run the generator on interfaces one at a time during early development to isolate parsing errors.
+</Warning>
+
+### 1.3 Unhandled Method Return Signatures
+
+Methods with unexpected return types or number of return values cause generator errors. Rules:
+
+- Methods that execute a query must return at least an `error`.
+- Methods that return data typically return a single typed result and an `error`.
+- Only one or two return values are supported (the last must be `error`).
+
+Examples to avoid:
+
+```go
+// Invalid: returns three values
+func Foo() (string, int, error)
+
+// Invalid: last return value is not error
+func Bar() (string, int)
+
+// Valid: returns typed result and error
+func FindUser(id int) (User, error)
+
+// Valid: returns only error
+func UpdateUser(u User) error
+```
+
+### 1.4 Missing Context Parameter
+
+The generator automatically inserts `context.Context` as the first parameter if it's missing in a method signature to support context-aware queries.
+
+<Tip>
+You can include `ctx context.Context` explicitly for clarity, but it is not mandatory.
+</Tip>
+
+### 1.5 Configuration Conflicts
+
+When using `genconfig.Config`, conflicting or incomplete mappings can lead to incorrect field helper generation:
+
+- `FieldNameMap` overrides `FieldTypeMap`. Ensure field names match the generator logic.
+- Using blacklists (`Exclude*`) without understanding inclusion patterns might silently exclude your interfaces or structs.
+
+<Tip>
+If generation is not happening as expected, temporarily remove inclusion/exclusion filters to isolate the cause.
+</Tip>
+
+---
+
+## 2. Step-by-Step Troubleshooting Workflow
+
+Follow this actionable checklist when encountering issues.
+
+<Steps>
+<Step title="Verify Input Path and Files">
+Confirm the `-i` (input) flag points to the correct directory or Go file containing exported interfaces and structs.
+
+- Use absolute or relative paths to source Go code.
+- Avoid specifying generated output directory as input.
+</Step>
+<Step title="Check Method Comment Templates">
+Review SQL templates in interface method comments for:
+- Proper `{{end}}` tags
+- Correct parameter usage with `@param` placeholders matching method parameters
+- Valid SQL template directives
+</Step>
+<Step title="Review Interface and Struct Names">
+Ensure your `IncludeInterfaces` and `IncludeStructs` filters (if configured) match exactly the names or patterns of your interfaces and structs.
+
+- Use case-sensitive names
+- Use package-qualified selectors if used, e.g. `models.Query(nil)`
+</Step>
+<Step title="Build and Format Generated Code">
+After generation, attempt to compile and format the output manually using `go build` and `goimports` to detect syntax or import issues.
+
+- Use error messages to locate source of issues
+- Inline generated comments flag the generator version and file
+</Step>
+<Step title="Enable Verbose Logging (Optional)">
+Run the CLI with debugging enabled or add print statements in your own development fork to trace parsing and generation steps.
+
+- Not officially supported yet but useful in deep troubleshooting
+</Step>
+<Step title="Consult Documentation and Examples">
+Refer to quick start and example code to verify your interface and model design follows idiomatic patterns.
+
+- Compare your code against `/examples/query.go` and generated outputs.
+</Step>
+</Steps>
+
+---
+
+## 3. Practical Tips and Best Practices
+
+### 3.1 Organizing Your Codebase
+
+- Keep models and interfaces in the same package or a clearly importable path.
+- Place the `genconfig.Config` literal in a package file close to your interfaces to apply settings properly.
+- Avoid mixing generated files into source directories unless you exclude them from input scanning.
+
+### 3.2 Writing Interfaces with SQL Templates
+
+- Write well-structured SQL queries with proper placeholders.
+- Use `{{where}}` and `{{set}}` directives for conditional clauses.
+- Test queries in a database client when possible to validate logic.
+
+### 3.3 Handling Generated Files
+
+- Keep generated code directories separate (use the `-o` flag) to avoid confusion.
+- Regenerate code after any interface or model changes.
+- Use Go modules or IDE tooling to integrate generated files smoothly.
+
+### 3.4 Diagnosing Common Errors
+
+| Error Message                                | Cause                                                | Solution                                   |
+|----------------------------------------------|------------------------------------------------------|--------------------------------------------|
+| No interfaces found for generation           | Input path incorrect or no matching interfaces         | Check input path and naming filters         |
+| Method missing required return values        | Return values mismatch with method's SQL template     | Adjust method signature to comply             |
+| Syntax errors in generated code              | Template syntax or incorrect generated code           | Validate SQL template and regenerate          |
+| Conflicts in import paths                    | Duplicate imports or ambiguous packages                | Check package imports, aliases, and `genconfig`|
+
+---
+
+## 4. Troubleshooting Examples
+
+### Example 1: Generator Skips Your Interface
+
+**Problem:** Running `gorm gen -i ./path/to/interfaces` generates no files.
+
+**Steps to Fix:**
+
+1. Confirm interface is exported, e.g., `type Query[T any] interface`.
+2. Confirm interface method(s) have SQL template comments.
+3. Check for `IncludeInterfaces` filters in `genconfig.Config` that might exclude your interface.
+4. Run with empty filters or temporarily remove `genconfig.Config`.
+5. Check CLI command input path correctness.
+
+---
+
+### Example 2: Compilation Error on Generated Code
+
+**Problem:** Generated code fails to compile with unknown types or missing imports.
+
+**Steps to Fix:**
+
+1. Verify your model definitions and imported packages use fully qualified names when needed.
+2. Ensure `FieldTypeMap` and `FieldNameMap` in config correctly map custom types.
+3. Re-run the generator to refresh imports.
+4. Check for misspelled package names or aliases.
+
+---
+
+### Example 3: SQL Template Parsing Error
+
+**Problem:** Generation fails with an error about unmatched `{{end}}` or malformed templates.
+
+**Steps to Fix:**
+
+1. Review your interface method comments for correct SQL template syntax.
+2. Use minimal queries without conditionals to narrow the issue.
+3. Add missing `{{end}}` statements.
+4. Consider breaking complex templates into smaller methods.
+
+---
+
+## 5. Additional Resources and Next Steps
+
+- [Writing Your First Models and Query Interfaces](../../getting-started/first-steps-usage/writing-models-interfaces) — Understand proper model and interface creation.
+- [Generating Code with GORM CLI](../../getting-started/first-steps-usage/generating-code) — Detailed explanation of generator usage and config.
+- [Using the Generated APIs in Your Project](../../getting-started/first-steps-usage/using-generated-apis) — Learn to use generated query APIs.
+- [System Architecture](../../overview/architecture-core-concepts/system-architecture-diagram) — Deep dive into component interactions.
+
+<Tip>
+When stuck, review your setup step-by-step using the [Quick Validation & First Query](../../getting-started/first-steps-usage/quick-validation-steps) guide to isolate issues early.
+</Tip>
+
+---
+
+By following this guide, you will reliably avoid common blockers and confidently troubleshoot any issues that arise during GORM CLI code generation and usage.
+
+
+---
+
+# Related Documentation
+
+- **Getting Started:** Setup, installation, and validating your environment
+- **Writing Models/Interfaces:** How to prepare your source code for generation
+- **Using Generated APIs:** Practical usage and integration into your Go applications
+- **Configuration Reference:** Customizing generation behavior with `genconfig.Config`
+
+---
+
+# Summary
+This page equips you to identify and resolve frequent issues with GORM CLI code generation and usage. It offers a structured troubleshooting workflow, practical coding tips, and example resolutions for common errors, helping you maintain a smooth and productive code generation process.
+
+
+---
