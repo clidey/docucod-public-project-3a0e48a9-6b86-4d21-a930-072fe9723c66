@@ -1,0 +1,193 @@
+---
+title: "Context Injection & Method Signature Handling"
+description: "Learn how method context handling works—how the CLI auto-injects context parameters for generated query and CRUD methods, ensuring idiomatic and correct usage patterns in Go database applications."
+---
+
+# Context Injection & Method Signature Handling
+
+Understanding how GORM CLI handles method signatures—particularly automatic context injection for generated query and CRUD methods—is essential for writing idiomatic, type-safe database code in Go. This page explains the philosophy, behavior, and practical impact of context parameter injection on your interface definitions and generated Go code.
+
+---
+
+## Why Context Injection Matters
+
+Go’s `context.Context` has become the de facto standard for managing deadlines, cancellation signals, and request-scoped values in database interactions and other I/O operations. Incorporating context into database query and mutation methods ensures your application can respond gracefully to timeouts and cancellations, improving robustness.
+
+However, requiring users to explicitly add `context.Context` as the first method parameter in every query interface quickly becomes repetitive and error prone. GORM CLI alleviates this by automatically injecting a context parameter if your interface method does not already have one. This results in cleaner interface definitions without sacrificing the idiomatic Go best practice.
+
+<Info>
+The generator always inserts a `ctx context.Context` as the first parameter of every generated method, unless the interface method already declares it explicitly.
+</Info>
+
+---
+
+## How Context Injection Works
+
+1. **Detection:** When parsing your interface methods, GORM CLI inspects the parameter list to detect presence or absence of a `context.Context` parameter.
+
+2. **Implicit Injection:** If no `context.Context` parameter is found (either by name `ctx` or by type `context.Context`), the generator adds it automatically as the first parameter in the generated code method signature.
+
+3. **Preservation:** If you explicitly provide `ctx context.Context` as a parameter, GORM CLI preserves this method signature exactly and does not duplicate or reorder it.
+
+4. **Usage:** The generated implementation forwards this context param to the underlying GORM query or execution calls.
+
+### Example: Interface Without Context
+
+```go
+// Query interface without explicit context
+// The generator adds `ctx context.Context` automatically as first parameter.
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+}
+```
+
+**Generated method signature:**
+
+```go
+func (q QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+  // ... implementation ...
+}
+```
+
+### Example: Interface With Context
+
+```go
+// Query interface with explicit context parameter
+// The generator preserves the method signature as-is.
+type Query[T any] interface {
+  GetByID(ctx context.Context, id int) (T, error)
+}
+```
+
+**Generated method signature:**
+
+```go
+func (q QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+  // ... implementation ...
+}
+```
+
+---
+
+## Practical User Outcomes
+
+### Clarity & Conciseness
+You can write straightforward interface methods focused on domain parameters without boilerplate context arguments, knowing context will be incorporated properly during generation.
+
+### Idiomatic Usage
+Generated code follows Go best practices by always including context for cancellation, deadlines, and metadata propagation.
+
+### Seamless Integration
+Generated APIs integrate smoothly into context-aware application flows without manual modifications.
+
+### Flexibility
+Explicit context use is supported if you want fine-grained control over parameter naming or position.
+
+---
+
+## How to Define Query Interface Methods for Best Results
+
+- **Omit context parameters** for brevity—favor the most straightforward domain parameter list you want.
+- **Expect `ctx context.Context`** to appear as the first param in generated Go methods.
+- **Add explicit context** only if you need to customize the parameter name or order.
+- **Ensure method signatures return error** as last parameter so the generator knows to complete implementation.
+
+<Note>
+GORM CLI always injects a **single** context param as the first method argument and does not support multiple contexts or different param positions.
+</Note>
+
+---
+
+## Behind the Scenes: Signature Parsing & Generation
+
+The GORM CLI internally parses Go interface AST to detect method parameter lists. It uses heuristics to identify context presence via:
+
+- Parameter name exactly `ctx`
+- Parameter type exactly `context.Context`
+
+If not detected, context is prepended silently:
+
+```go
+func (m Method) ParamsString() string {
+  var parts []string
+  hasCtx := false
+  for _, p := range m.Params {
+    if p.Name == "ctx" || p.Type == "context.Context" {
+      hasCtx = true
+      p.Name = "ctx"
+    }
+    parts = append(parts, fmt.Sprintf("%s %s", p.Name, p.GoFullType()))
+  }
+  if !hasCtx {
+    parts = append([]string{"ctx context.Context"}, parts...)
+  }
+  return strings.Join(parts, ", ")
+}
+```
+
+This ensures all generated method declarations begin with `ctx` when implemented.
+
+---
+
+## Example Workflow with Generated API
+
+```go
+// Interface written without context param
+package examples
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+}
+```
+
+Run generator:
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+Use generated API with context in your app:
+
+```go
+ctx := context.Background()
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+if err != nil {
+  // handle error
+}
+fmt.Println(user.Name)
+```
+
+---
+
+## Troubleshooting & Common Pitfalls
+
+### Generated Methods Missing `ctx` Parameter
+- Verify your interface method does NOT already declare a parameter named `ctx` or of type `context.Context`.
+- If it does, generator preserves exactly and does not inject a second context.
+
+### Conflicting Parameter Names or Multiple Contexts
+- GORM CLI expects at most one context parameter as the first argument.
+- Avoid writing your own manual context parameters in other positions.
+
+### Unintended Behavior Due to Missing Error Return
+- To generate executable methods with context, ensure your interface methods return `(T, error)` or at least `error` as the last return value.
+- Methods without any return values or with incorrect signatures may trigger generation errors or unexpected code.
+
+---
+
+## Summary
+
+Automated context injection in GORM CLI balances interface brevity and idiomatic Go database programming. By transparently prepending `ctx context.Context` parameters when missing, it enforces best practices without burdening users with boilerplate, empowering you to write clean interfaces that produce powerful, context-aware, type-safe query and mutation APIs.
+
+---
+
+## See Also
+
+- [Interface-Driven Query API](https://gorm.io/cli/concepts/query-generation-templates/interface-driven-query-api)
+- [SQL Template DSL Concepts](https://gorm.io/cli/concepts/query-generation-templates/template-dsl)
+- [Using Generated APIs](https://gorm.io/cli/guides/core-workflows/using-generated-apis)
+- [Configuring Generation](https://gorm.io/cli/guides/core-workflows/configuring-generation)
+
+---
