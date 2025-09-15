@@ -1,0 +1,261 @@
+---
+title: "Using Generated APIs"
+description: "Integrate the generated query APIs and field helpers into your Go application. See common patterns for reads, writes, and field operations using the output of GORM CLI."
+---
+
+# Using Generated APIs
+
+Integrate the generated query APIs and field helpers from GORM CLI into your Go application effortlessly. This guide walks you through common patterns for performing reads, writes, and field operations using the output of the CLI. Discover how to leverage type-safe interfaces, field helpers, and association operations, unlocking powerful, maintainable database interactions in your GORM projects.
+
+---
+
+## 1. Overview of Generated APIs
+
+GORM CLI produces two main types of generated code:
+
+- **Query APIs**: Interface-driven, type-safe methods based on your Go interfaces with SQL templates.
+- **Field Helpers**: Model-driven field helpers for constructing filters, updates, and associations.
+
+Using these together, you gain compile-time safety, a fluent API for building queries, and expressive association operations.
+
+
+## 2. Accessing Generated Query APIs
+
+The generated query API exposes methods matching the signatures in your defined interfaces. Each method is linked to SQL templates you provide.
+
+### Example interface method:
+
+```go
+// SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (T, error)
+```
+
+### Using the generated API:
+
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+```
+
+- `generated.Query[User](db)` returns an instance of your query interface implementation for type `User`.
+- Pass your context and parameters directly.
+- Receive type-safe results or errors.
+
+### Notes:
+
+- If your method does not declare a `context.Context` parameter, the generator injects one automatically.
+- Methods with raw SQL annotations are fully implemented.
+
+
+## 3. Using Model-Driven Field Helpers
+
+For each model, GORM CLI generates a strongly typed `generated.ModelName` struct with fields representing columns and associations. These helpers provide methods to build predicates and update setters.
+
+### Basic field helpers:
+
+```go
+// Filtering
+generated.User.ID.Eq(1)              // id = 1
+generated.User.Name.Like("%jinzhu%") // name LIKE '%jinzhu%'
+
+// Numeric comparisons
+generated.User.Age.Between(18, 65)  // age BETWEEN 18 AND 65
+
+// Null checks
+generated.User.Score.IsNull()        // score IS NULL
+
+// Updates
+generated.User.Name.Set("jinzhu") // SET name="jinzhu"
+```
+
+### Example: Query using field helpers
+
+```go
+users, err := gorm.G[User](db).
+  Where(generated.User.Age.Gt(18)).
+  Find(ctx)
+```
+
+This example finds all users older than 18 using generated predicates.
+
+
+## 4. Executing CRUD Operations with Generated APIs
+
+### Create with field setters
+
+Use the `.Set()` method with generated setters to create new rows.
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Age.Set(25),
+    generated.User.IsAdult.Set(true),
+  ).
+  Create(ctx)
+```
+
+### Update existing rows with conditions and setters
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Name.Set("jinzhu"),
+    generated.User.Age.Incr(1), // Increment age by 1
+  ).
+  Update(ctx)
+```
+
+### Delete records
+
+GORM CLI-generated APIs integrate naturally with GORM’s standard delete calls.
+
+```go
+gorm.G[User](db).
+  Where(generated.User.Age.Lt(18)).
+  Delete(ctx)
+```
+
+
+## 5. Working with Associations
+
+The generated code includes helpers for associations as typed `field.Struct[T]` or `field.Slice[T]`. Use these to perform create, update, unlink, and delete operations on related entities with full type safety.
+
+### Key association operations:
+
+- **Create**: Create and link associated records.
+- **CreateInBatch**: Batch create multiple associated records.
+- **Update**: Update associated records with optional filtering.
+- **Unlink**: Remove associations without deleting records.
+- **Delete**: Delete associated records (not parents).
+
+### Examples:
+
+```go
+// Create a user with one pet
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Update a user's pet where name = 'fido'
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+    Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+// Unlink a pet from user (remove association)
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete associated pets with name 'old'
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete()).
+  Update(ctx)
+```
+
+### Semantics by association type
+
+| Association Type | Unlink Behavior                          | Delete Behavior                |
+|------------------|-----------------------------------------|-------------------------------|
+| belongs to       | Clears parent foreign key (FK=null)     | Deletes associated record     |
+| has one/has many | Clears child foreign key (FK=null)      | Deletes child records         |
+| many2many        | Removes join table rows only             | Removes join table rows only  |
+
+
+## 6. Template-Based Queries in Generated APIs
+
+You can define SQL templates inline in your interfaces to create flexible, type-safe queries. The generated methods bind Go parameters to SQL using GORM CLI’s DSL.
+
+### Key template directives:
+
+| Directive  | Description                        | Example                                   |
+|------------|----------------------------------|-------------------------------------------|
+| `@@table`  | Model's table name                | `SELECT * FROM @@table WHERE id=@id`      |
+| `@@column` | Dynamic column name               | `WHERE @@column=@value`                    |
+| `@param`   | Binds Go param to SQL param       | `WHERE name=@user.Name`                    |
+| `{{where}}`| Conditional WHERE clause          | `{{where}} age > 18 {{end}}`               |
+| `{{set}}`  | Dynamic SET clause for UPDATE    | `{{set}} name=@name {{end}}`               |
+| `{{if}}`   | Conditional SQL fragment          | `{{if age > 0}} AND age=@age {{end}}`      |
+| `{{for}}`  | Iterate collections in SQL        | `{{for _, tag := range tags}} ... {{end}}`|
+
+### SQL template example:
+
+```go
+// SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (T, error)
+
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+
+### Usage example:
+
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+err := generated.Query[User](db).
+  UpdateUser(ctx, User{Name: "jinzhu", Age: 20}, 1)
+```
+
+
+## 7. Best Practices & Tips
+
+- **Prefer generated APIs over raw SQL**: Benefit from compile-time safety and simplified query building.
+- **Use field helpers for predicates and updates**: This leads to clearer, maintainable code.
+- **Leverage association helpers**: They abstract complex SQL join and link logic safely.
+- **Use context injection**: Methods will include `context.Context` automatically for cancellation and deadlines.
+- **Map custom field types** through configuration for extended support.
+
+
+## 8. Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Generated API Usage">
+<Accordion title="Method Not Found in Generated API">
+Verify that your interface method is correctly defined with SQL templates. Ensure you regenerated code after adding or modifying methods.
+</Accordion>
+<Accordion title="Field Helper Methods Not Recognized">
+Check your model struct for correct naming and exported fields. Regenerate code and confirm output files include the expected helpers.
+</Accordion>
+<Accordion title="Association Operations Fail at Runtime">
+Ensure association helpers are used according to your model relations. Review parent/child relationship types to apply correct unlink/delete.
+</Accordion>
+<Accordion title="Context Not Injected in Method Parameters">
+All generated methods include `context.Context` automatically unless already declared. If you encounter issues, regenerate with the latest CLI.
+</Accordion>
+</AccordionGroup>
+
+
+## 9. Next Steps
+
+- Explore [Writing Your First Query Interface and Model](./writing-query-interfaces-and-models) to start defining your custom queries.
+- Proceed to [Generating Code](./generating-code) for triggering generation pipelines.
+- Learn more advanced patterns in [Working with Associations](./working-with-associations).
+- Review the [Quickstart & Typical Workflow](../real-world-integration-use-cases/quickstart-and-workflow-overview) for end-to-end integration.
+
+---
+
+## References
+- [GORM CLI Quickstart & Typical Workflow](../real-world-integration-use-cases/quickstart-and-workflow-overview)
+- [Writing Query Interfaces and Models](./writing-query-interfaces-and-models)
+- [Generating Code](./generating-code)
+- [Working with Associations](./working-with-associations)
+- [Integration with GORM](../real-world-integration-use-cases/integration-with-gorm-and-tooling)
+
+
+---
+
+For full source examples and detailed API references, visit the [GORM CLI GitHub repository](https://github.com/go-gorm/cli).
+
+---
