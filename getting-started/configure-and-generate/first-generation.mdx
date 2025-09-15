@@ -1,0 +1,245 @@
+---
+title: "Generating Code: Your First Workflow"
+description: "Provides a step-by-step narrative for new users to define a simple model and query interface, then run the GORM CLI to generate query APIs and field helpers. Includes clear CLI commands and pointers to resulting files."
+---
+
+# Generating Code: Your First Workflow
+
+This guide walks you through the essential steps to define a simple model and query interface, then use the GORM CLI to generate type-safe query APIs and field helpers for your Go projects. By following this narrative, you'll quickly produce generated code files that you can integrate directly to accelerate development with compile-time safety and fluent APIs.
+
+---
+
+## 1. Preparing Your Model and Query Interface
+
+Your journey begins by writing two critical components in the same Go package or directory:
+
+- **Model Structs**: define your GORM model(s), typically struct types describing your database schema.
+- **Query Interfaces**: declare Go interfaces with methods annotated by raw SQL or templated SQL comments.
+
+### Example Model
+
+Create a Go file describing a simple model, for example `User`:
+
+```go
+package models
+
+import "gorm.io/gorm"
+
+type User struct {
+    gorm.Model
+    Name string
+    Age  int
+}
+```
+
+### Example Query Interface
+
+In the same package or directory, define an interface describing your queries and updates with SQL templates in comments:
+
+```go
+package models
+
+type Query[T any] interface {
+    // SELECT * FROM @@table WHERE id=@id
+    GetByID(id int) (T, error)
+
+    // UPDATE @@table SET name=@user.Name, age=@user.Age WHERE id=@id
+    UpdateUser(user User, id int) error
+}
+```
+
+<Tip>
+Keep your interface and model definitions close (same package/directory) so GORM CLI can process them together in one generation step.
+</Tip>
+
+---
+
+## 2. Running GORM CLI to Generate Code
+
+With your model and interface ready, use the GORM CLI `gen` command to produce the generated code.
+
+### Required CLI Inputs
+
+- `-i`, `--input`  – Path to your Go source directory or file containing interfaces and models
+- `-o`, `--output` – Directory to place the generated Go source code (defaults to `./g`)
+
+### Example Command
+
+```bash
+gorm gen -i ./models -o ./generated
+```
+
+This command instructs GORM CLI to:
+
+1. Recursively parse your source Go files in `./models`.
+2. Extract interfaces with SQL annotations and struct model definitions.
+3. Generate corresponding Go files under `./generated`, preserving package structure.
+
+<Tip>
+By default, if you omit the output option, generated files go into a `g` subdirectory.
+Be sure to check or create the output path before running.
+</Tip>
+
+### What Happens During Generation
+
+- **Query Interfaces** become concrete, type-safe implementations returning well-typed results.
+- **Model Structs** become strongly-typed field helpers for filtering, updating, and association operations.
+- The output directory mirrors your input directory structure.
+
+### Success Indication
+
+Successful generation outputs logs like:
+
+```
+Generating file ./generated/models/query.gen.go from ./models/query.go...
+Generating file ./generated/models/user.gen.go from ./models/user.go...
+```
+
+<Tip>
+If no interfaces or structs are found in your inputs, GORM CLI will skip generation silently for those files.
+</Tip>
+
+---
+
+## 3. Inspecting Generated Files and Code
+
+After generation, you will find generated files typically named after your source, e.g. `query.gen.go` or `user.gen.go` in the output directory.
+
+### What to Look For
+
+- **Interface Implementations**: Concrete types with methods matching your interface, enabling queries with strong typing.
+- **Field Helpers**: Variables representing model fields with helper methods for predicates and setters.
+
+Example snippet of generated query interface:
+
+```go
+func Query[T any](db *gorm.DB, opts ...clause.Expression) QueryInterface[T] {
+    return QueryImpl[T]{Interface: gorm.G[T](db, opts...)}
+}
+
+type QueryInterface[T any] interface {
+    gorm.Interface[T]
+    GetByID(id int) (T, error)
+    UpdateUser(user User, id int) error
+}
+```
+
+Field helper example:
+
+```go
+var User = struct {
+    ID   field.Number[uint]
+    Name field.String
+    Age  field.Number[int]
+}{
+    ID:   field.Number[uint]{}.WithColumn("id"),
+    Name: field.String{}.WithColumn("name"),
+    Age:  field.Number[int]{}.WithColumn("age"),
+}
+```
+
+<Tip>
+Generated code is annotated with a comment warning not to edit manually.
+Keep your source interfaces and structs as the source of truth.
+</Tip>
+
+---
+
+## 4. Using the Generated Code in Your Project
+
+Import the generated package and use the generated query methods and field helpers alongside your regular GORM workflows.
+
+### Sample Usage
+
+```go
+package main
+
+import (
+    "context"
+    "gorm.io/cli/gorm/generated"
+    "gorm.io/gorm"
+    "myproject/models"
+)
+
+func main() {
+    ctx := context.Background()
+    db, _ := gorm.Open(/* your config */)
+
+    // Fetch user by ID
+    user, err := generated.Query[models.User](db).GetByID(ctx, 42)
+    if err != nil {
+        panic(err)
+    }
+
+    // Update user
+    err = generated.Query[models.User](db).UpdateUser(ctx, models.User{Name: "Alice", Age: 30}, 42)
+    if err != nil {
+        panic(err)
+    }
+}
+```
+
+<Tip>
+Use field helpers for fluent filtering and updates, e.g., `generated.User.Name.Eq("Alice")`.
+Combine with GORM builder methods (`Where`, `Set`, `Create`) for powerful type-safe queries.
+</Tip>
+
+---
+
+## Additional Tips and Best Practices
+
+- **Context Parameters**: You don't need to add `context.Context` manually in interface methods; GORM CLI injects it automatically.
+- **Package-level Configuration**: Customize generation with a `genconfig.Config` variable in your package if you want to control output paths, filter interfaces/structs, or map custom field types.
+- **Keep Your Interfaces Simple**: Start with straightforward query methods; complexity can grow as you learn templating DSL.
+- **Use SQL Templating**: Leverage GORM CLI's templating syntax in interface method comments to express dynamic queries safely.
+
+---
+
+## Troubleshooting
+
+<AccordionGroup title="Common Issues & Solutions">
+<Accordion title="No Generated Files After Running">
+- Ensure the input path contains Go files with public interfaces and structs.
+- Verify your interfaces have proper SQL annotation comments.
+- Check for compilation errors or parse issues in source files.
+</Accordion>
+<Accordion title="Generated Code Does Not Compile">
+- Confirm Go module dependencies are correctly installed.
+- Check for any syntax errors in your interfaces.
+- Run `go fmt` and `go mod tidy` to clean your workspace.
+</Accordion>
+<Accordion title="Field Helpers Missing or Incomplete">
+- Verify model structs have exported fields.
+- Use struct tags or configuration to map custom field types.
+- Confirm you are not excluding structs inadvertently via config.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## References and Next Steps
+
+- [Basic Configuration](./basic-config)  – How to customize generation using genconfig.Config
+- [Integrating Generated Code](./project-integration)  – Best practices for using generated code in projects
+- [Defining Query Interfaces & Models](../../guides/getting-started-workflows/defining-interfaces-models)  – Learn the core definitions and templating
+- [Validating Your Installation](../setup-and-installation/first-run-validation)  – Confirm CLI setup before generation
+
+Explore these to deepen your understanding and confidently extend generated code for your project needs.
+
+---
+
+> You're now ready to generate your first GORM query code, unlocking safer and more efficient database operations with minimal boilerplate. Keep your models and interfaces clean and well-annotated, and use the CLI to automate the rest.
+
+---
+
+<Check>
+Ensure you have Go 1.18+ installed and your project is properly setup before generating.
+</Check>
+
+<Info>
+Using incremental changes? Rerun `gorm gen` each time you update interfaces for fresh code.
+</Info>
+
+<Warning>
+Do NOT edit generated code manually; always update your source interfaces and models instead.
+</Warning>
