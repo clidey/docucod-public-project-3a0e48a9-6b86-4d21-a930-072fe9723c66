@@ -1,0 +1,235 @@
+---
+title: "Integration with GORM & Go Projects"
+description: "Identify key integration points—how generated code fits into a Go project using GORM, how developers invoke the generator, and where the generated output lives. Learn about extensibility via config and how GORM CLI maintains seamless compatibility."
+---
+
+# Integration with GORM & Go Projects
+
+GORM CLI seamlessly bridges your Go application code and GORM ORM by generating type-safe query APIs and model-driven field helpers that integrate naturally into your existing Go projects. This page guides you through the critical integration points: how generated code fits within a Go project leveraging GORM, how you invoke the generator, where generated files live, and customization through generation configuration. You'll also discover how the GORM CLI command-line tool maintains full compatibility while allowing extensibility.
+
+---
+
+## Why Integration Matters
+
+As a Go developer using GORM, your goal is to simplify complex database interactions safely and efficiently. GORM CLI generates code artifacts that dovetail into your project’s structure and workflow, eliminating boilerplate and runtime errors.
+
+This integration page helps you understand:
+
+- How generated code aligns with Go project layouts
+- How to invoke GORM CLI correctly
+- How generated source fits with GORM’s APIs
+- How to customize generation using configuration
+- How GORM CLI ensures a smooth developer experience
+
+
+## How Generated Code Fits Into Your Go & GORM Project
+
+### Placement of Generated Code
+
+By default, GORM CLI outputs generated files into a directory you specify via the `-o` (or `OutPath` in config) flag. Typically, this is within your project, under a folder like `./generated` or `./examples/output`. Generated code includes:
+
+- **Interface implementations:** Type-safe APIs based on your annotated interfaces (e.g., `Query[T]`)
+- **Model-driven field helpers:** Helpers for querying, updating fields, and managing associations
+
+These integrate as standard Go packages you import and consume directly.
+
+#### Example 
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+Here `./examples` is the input where your models and query interfaces reside, and `./generated` contains the generated Go files.
+
+
+### Using Generated APIs in Your Code
+
+Once generated, your application code imports the generated package and invokes the fluent, type-safe query APIs. For example:
+
+```go
+// Fetch user by ID
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+
+// Query with custom filters
+users, err := generated.Query[User](db).FilterByNameAndAge("jinzhu", 25).Find(ctx)
+
+// Using model-driven field helpers for updates
+err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("alice"))
+  .Set(generated.User.Age.Set(30))
+  .Update(ctx)
+```
+
+The generated code is idiomatic and composes naturally with `*gorm.DB` queries.
+
+
+## How to Invoke the Generator
+
+### Command-Line Invocation
+
+Install the GORM CLI tool first:
+
+```bash
+go install gorm.io/cli/gorm@latest
+```
+
+Then run the generator:
+
+```bash
+gorm gen -i ./path/to/your/pkg -o ./path/to/generated
+```
+
+- `-i` points to your input directory containing your Go interfaces and model structs.
+- `-o` defines the output directory.
+
+You can also customize generation via a package-level `genconfig.Config` (covered later).
+
+
+### Under the Hood
+
+The generator parses your annotated interfaces (comments with SQL templates) and model structs to emit:
+
+- Interface implementations with compiled templated SQL
+- Field helpers with strongly typed predicates and setters
+- Association helpers matching GORM relationships
+
+### Integration with Go Modules and Packages
+
+The generator detects the Go module root and package import paths automatically. Generated code uses the proper package namespace to integrate smoothly without import conflicts or path issues.
+
+
+## Extensibility via Configuration
+
+Customize generation by defining a package-level variable of type `genconfig.Config` in the package being generated. This config controls:
+
+- **OutPath:** Override the CLI output directory per package
+- **FieldTypeMap:** Map Go field types to custom field helpers (e.g., map `sql.NullTime` to `field.Time{}`)
+- **FieldNameMap:** Map struct field tags (`gen:"json"`) to custom helpers
+- **Include/Exclude:** Whitelist or blacklist interfaces or structs by pattern or type
+- **FileLevel:** Control scope of generation (package vs. file)
+
+```go
+package examples
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+  OutPath: "examples/output",
+
+  FieldTypeMap: map[any]any{
+      sql.NullTime{}: field.Time{},
+  },
+
+  FieldNameMap: map[string]any{
+      "json": JSON{},
+  },
+
+  IncludeInterfaces: []any{"Query*"},
+  ExcludeStructs: []any{"*DTO"},
+}
+```
+
+By tailoring the config, you can shape generated code to your project needs and enforce policy across your codebases.
+
+
+## How GORM CLI Maintains Seamless Compatibility
+
+- **Minimal Invasiveness:** Generated code complements your Go and GORM code without modifying your existing models or database setup.
+- **Go Modules Friendly:** It respects Go module paths and package structures.
+- **Context Auto-Injection:** Context parameters are automatically added if missing to support idiomatic Go.
+- **Extensive Field Helper Support:** Covers basic fields and complex associations with familiar fluent APIs.
+- **Consistent Naming:** Uses GORM's NamingStrategy for column names, honoring tags and conventions.
+
+
+## Practical Tips & Best Practices
+
+### Project Structure
+
+- Keep your models and query interfaces organized in a recognizable package
+- Use clear naming and tagging conventions for easier config filtering
+- Generate code into a separate package or folder to avoid manual edits
+
+### Generation Invocation
+
+- Invoke `gorm gen` from your project root or module-aware location
+- Use relative paths to `-i` and `-o` for portability
+- Utilize `genconfig.Config` to reduce CLI flags and centralize settings
+
+### Extending Field Helpers
+
+- Define custom field helpers (e.g., JSON helpers) and map them via `FieldNameMap`
+- This enables database-specific SQL syntax embedded in helpers for advanced scenarios
+
+
+## Common Pitfalls & Troubleshooting
+
+### Issue: Generated Code Not Found or Import Errors
+
+- Ensure the output directory `-o` is inside your project and included in your module
+- Run `go mod tidy` after generation to refresh module imports
+
+### Issue: Changes to Models or Interfaces Not Reflected
+
+- Run the generator again; it does not watch files automatically
+- Confirm that your input directory `-i` matches the location of your interfaces/models
+
+### Issue: Unexpected Fields Included or Excluded
+
+- Check your `genconfig.Config` for proper `Include*` and `Exclude*` patterns
+- Remember whitelist takes priority over blacklist
+
+
+## Summary Diagram of Integration Flow
+
+```mermaid
+flowchart TD
+  UserCode["User Project Code"] -->|Defines interfaces & models| GORMCLI["GORM CLI Generator"]
+  GORMCLI -->|Reads & parses| UserInterfaces["Query Interfaces with SQL templates"]
+  GORMCLI -->|Reads & parses| UserModels["GORM Model Structs"]
+  GORMCLI -->|Generates| GeneratedCode["Generated Query API & Field Helpers"]
+  GeneratedCode -->|Imported by| UserCode
+  UserCode -->|Uses GORM| GormDB["GORM DB Instance"]
+  UserCode -->|Uses Generated APIs| GeneratedCode
+
+  subgraph Config
+    Config["genconfig.Config"]
+    Config --> GORMCLI
+  end
+
+  click GORMCLI "README.md#gorm-cli" "GORM CLI GitHub & Documentation"
+```
+
+This flow describes how your Go/GORM project defines interfaces and structs, how GORM CLI processes them with optional configuration, and how you then consume the generated code seamlessly via imports.
+
+---
+
+## Next Steps
+
+- **Create models and query interfaces** following the patterns in your project
+- **Configure generation** via CLI or `genconfig.Config` for custom behavior
+- **Run the generator** to produce integration-ready code
+- **Import and consume** generated APIs in your application for type-safe, fluent DB operations
+
+Explore related documentation:
+
+- [Quick Feature Overview](../quick-feature-overview)
+- [Customizing Generation with genconfig.Config](../../guides/advanced-features-patterns/customizing-generation-config)
+- [Working with Field Helpers](../../guides/advanced-features-patterns/working-with-field-helpers)
+
+
+<Check>
+If you encounter issues or conflicts, verify your directory paths and Go module setup before raising support questions.
+</Check>
+
+---
+
+## Reference Links
+
+- Official Repository: [https://github.com/go-gorm/cli](https://github.com/go-gorm/cli)
+- CLI Installation & Usage: [Getting Started Setup & Installation](../../getting-started/setup/installation)
+- Example Query Interfaces: `examples/query.go` (in repo)
+- Generator Configuration Examples: [Customizing Generation Config](../../guides/advanced-features-patterns/customizing-generation-config)
+
+---
+
+Built for seamless integration and developer productivity, the GORM CLI ensures your Go and GORM projects stay strongly typed, maintainable, and efficient.

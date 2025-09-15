@@ -1,234 +1,245 @@
 ---
-title: "How GORM CLI Generates APIs and Helpers"
-description: "Examine the high-level architecture: how user-defined Go models and interfaces are parsed, how SQL templates and struct introspection inform code generation, and what the lifecycle of generation looks like from the CLI invocation to output files."
+title: "Architecture Overview"
+description: "Gain a big-picture perspective on how GORM CLI orchestrates code generation. This page covers the main command-line entry point, generator coordination, integration with GORM, and the relationship between user-written query interfaces, struct models, and the generated output."
 ---
 
-# How GORM CLI Generates APIs and Helpers
+# Architecture Overview
 
-Explore the high-level architecture and lifecycle behind GORM CLI's code generation: how your user-defined Go models and interfaces are parsed and analyzed, the role of SQL templates and struct introspection in shaping generated code, and the step-by-step flow from invoking the CLI to producing fully typed output files. This guide provides a conceptual understanding to help you master and extend your use of GORM CLI’s code generation capabilities.
-
----
-
-## Overview
-
-GORM CLI transforms Go source code—specifically interfaces annotated with SQL templates and Go model structs—into two complementary forms of type-safe, idiomatic Go code:
-
-- **Interface-driven query APIs**: concrete implementations of user-defined interfaces that embed SQL templates in comments
-- **Model-driven field helpers**: strongly typed field and association helpers derived from model struct metadata
-
-This architecture enables compile-time safety, expressive queries, and fluent updates while minimizing boilerplate.
-
-The core is a **code generator** (the `gen.Generator`) that parses ASTs (abstract syntax trees) of your source files, interprets annotations and configurations, and renders templates into output Go code.
+Gain a big-picture perspective on how GORM CLI orchestrates code generation. This overview explains the key components involved, how user-defined query interfaces and model structs are processed, and how the generator coordinates creation of type-safe query APIs along with model-driven field helpers that seamlessly integrate with GORM.
 
 ---
 
-## Key Components in the Generation Process
+## High-Level Architecture
 
-### 1. Input: User-Defined Go Source
+At its core, GORM CLI serves as a code generator that transforms your Go source files into two complementary outputs:
 
-- **Interfaces with SQL Templates:** You define Go interfaces containing methods annotated with templated SQL in comments. These SQL comments use a DSL to include placeholders (e.g., `@@table`, `@param`), conditional clauses (`{{if}}`, `{{where}}`), and loops (`{{for}}`).
+- **Type-safe query APIs** that correspond to user-defined interfaces with embedded SQL templates.
+- **Model-driven field helpers** generated based on your struct definitions that provide fluent predicates and updater helpers.
 
-- **Model Structs:** Your data models, typically using GORM’s conventions, are parsed to extract fields, their Go types, and metadata such as tags and relations. This information drives generation of field helper variables for precise query building.
+The system emphasizes compile-time safety and expressive, discoverable APIs to enable robust database usage within Go applications leveraging GORM.
 
-- **Optional Configuration:** Per-package `genconfig.Config` values let you override output paths, include or exclude specific interfaces/structs, or remap Go types to custom field helpers.
+### Main Components
 
-### 2. Parsing & Analysis
+- **User Source Code:** Your Go packages containing:
+  - **Query interfaces** annotated with SQL template comments
+  - **Model structs** representing your database entities
+- **GORM CLI Generator:** The engine that parses and analyzes your Go source, extracts interfaces, methods, structs, and generation configurations, and then emits generated code.
+- **Generated Output:** Code files containing:
+  - Concrete implementations of query interfaces with tailored SQL
+  - Strongly typed field helpers for each model struct to aid in filters, updates, and association handling
 
-The `gen.Generator` walks the AST of each Go source file, extracting and analyzing:
-
-- **Imports:** to resolve package paths and ensure generated imports are correct
-
-- **Interfaces:** Parse method signatures, extract embedded SQL templates from method comments, and ensure method return types meet expectations (e.g., single or paired return values with error as last).
-
-- **Structs:** Discover exported fields, including those embedded anonymously. Field Go types are converted to corresponding field helper types, with IoC for custom mappings and association detection.
-
-- **Configs:** Identify per-package `genconfig.Config` literals to drive selective generation and customizations.
-
-### 3. Code Generation Templates
-
-Templates define the output Go code structure. For example, `internal/gen/template.go` contains the main template that:
-
-- Declares package and imports
-- Generates interface wrappers and implementation structs for each user interface
-- Implements methods that embed SQL logic, binding Go parameters and handling query execution or chaining
-- Emits field helper variables and struct definitions with metadata
-
-Templates use method metadata (parameters, results, SQL snippet) and struct metadata to produce idiomatic, type-safe code.
-
-### 4. Output and Writing
-
-The generator:
-
-- Determines output directories based on CLI flags and config values
-- Applies include/exclude filters for interfaces and structs
-- Writes generated files, maintaining directory structure relative to input
-- Runs code formatting (`goimports`) to ensure clean imports and style compliance
+These outputs integrate directly with `gorm.io/gorm`.
 
 ---
 
-## Lifecycle of Generation: From CLI to Generated Code
+## Generator Command-Line Entry Point
 
-### Step 1: CLI Invocation
+The generation workflow is triggered using the CLI tool via the `gen` command:
 
-You invoke the `gorm gen` command, specifying:
-
-- `-i/--input` path to your Go source directory or file
-- `-o/--output` directory for generated code (default `./g`)
-
-The CLI command creates a new `Generator` instance and calls its `Process` and `Gen` methods.
-
-### Step 2: Processing Input
-
-- Recursive directory traversal gathers Go source files.
-- Each file is parsed into an AST.
-- AST nodes are visited to extract interfaces, structs, imports, and config.
-
-### Step 3: Interface & Struct Processing
-
-- Interfaces: Method signatures and SQL comments are parsed. Method parameter and return types are normalized (injecting `context.Context` if missing).
-- SQL templates are validated and stored for rendering.
-- Structs: Fields and embedded structs are flattened. Field types are mapped to field helper types, including recognition of associations and custom mappings.
-
-### Step 4: Applying Configurations
-
-- Configurations enable controlling generation granularity and mapping.
-- OutPath overrides default output directory.
-- Include/Exclude rules filter interfaces and structs.
-
-### Step 5: Code Template Rendering
-
-- For each processed file that passes filtering, the generation template executes, interpolating data about interfaces, methods, structs, and fields.
-- Methods become wrappers executing raw or template-based SQL with typed parameters.
-- Structs become statically declared field helper variable sets.
-
-### Step 6: Writing Output and Formatting
-
-- Output directories and file paths are created if needed.
-- Go code files are written.
-- Code is formatted using `imports.Process` to fix imports and formatting.
-
-### Step 7: Using Generated Code
-
-Generated code is ready for import and use in your Go projects, providing:
-
-- **Type-safe query methods** corresponding to your interfaces
-- **Field helper variables** for filters, updates, and associations
-
----
-
-## Illustrative Example
-
-Suppose you define an interface method with SQL comment:
-
-```go
-// SELECT * FROM @@table WHERE id=@id
-GetByID(id int) (T, error)
+```bash
+gorm gen -i <input_path> -o <output_path>
 ```
 
-GORM CLI parses this and generates:
+- `-i, --input`: Specifies the path to the Go source file or directory containing your interfaces and models
+- `-o, --output`: Directory where generated code will be placed (defaults to `./g` if omitted)
+
+### Execution Flow
+
+- The CLI parses the input path, recursively analyzing Go files.
+- Each file is processed to:
+  - Parse imports, interfaces, and structs using Go's `go/ast` package
+  - Extract method signatures, SQL comments, and config annotations
+  - Apply configuration filters for inclusion or exclusion of interfaces and structs
+- The generator then renders templates into Go source code implementing the query interfaces and declares the model field helpers.
+
+### Code Example: CLI Command Construction
 
 ```go
-func (e QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
-  sb := &strings.Builder{}
-  params := make([]interface{}, 0)
-  sb.WriteString("SELECT * FROM users WHERE id=?")
-  params = append(params, id)
-  var result T
-  err := e.Raw(sb.String(), params...).Scan(ctx, &result)
-  return result, err
+cmd := &cobra.Command{
+   Use:   "gen",
+   Short: "Generate GORM query code from raw SQL interfaces",
+   RunE: func(cmd *cobra.Command, args []string) error {
+       g := Generator{
+           Files:   map[string]*File{},
+           outPath: output,
+       }
+
+       if err := g.Process(input); err != nil {
+           return fmt.Errorf("error processing %s: %v", input, err)
+       }
+
+       if err := g.Gen(); err != nil {
+          return fmt.Errorf("error render template got error: %v", err)
+       }
+
+       return nil
+   },
 }
 ```
 
-Simultaneously, for a model struct like:
+This command setup ensures users define the correct input interface source and optional output, while handling errors gracefully.
+
+---
+
+## Internal Generator Coordination
+
+Once input files are parsed, the generator:
+
+1. **Processes Interfaces:** Extracts all interface definitions, their methods, and attached SQL template annotations, verifying method return types.
+2. **Processes Structs:** Collects struct declarations, fields, and any tagged type mappings to determine the appropriate field helper types.
+3. **Applies Configurations:** Based on any `genconfig.Config` instances found within source files (or `FileLevel` flags), filters which interfaces and structs participate in generation using include/exclude patterns.
+4. **Generates Code:** Using Go's `text/template` package, emits:
+   - Implementation structs and methods for interfaces, injecting SQL strings with proper parameter bindings.
+   - Declares and initializes strongly typed field helper variables for each struct's fields.
+5. **Output and Formatting:** Writes generated code files to the designated output directory, formats them using `golang.org/x/tools/imports` for idiomatic import management and style.
+
+### Generation Template Snippet (Simplified)
 
 ```go
-type User struct {
-  ID   uint
-  Name string
-  Age  int
+func {{.Name}}[T any](db *gorm.DB, opts ...clause.Expression) {{$IfaceName}}Interface[T] {
+ return {{$IfaceName}}Impl[T]{
+    Interface: gorm.G[T](db, opts...),
+ }
+}
+
+// Struct of field helpers
+var {{.Name}} = struct {
+  {{range .Fields}}
+  {{.Name}} {{.Type}}
+  {{end}}
+} {
+  {{range .Fields}}
+  {{.Name}}: {{.Value}},
+  {{end}}
 }
 ```
 
-The generator produces field helpers like:
+This shows how dynamic code ties together generic GORM interfaces and strongly-typed fields.
+
+---
+
+## Integration & Output
+
+### Generated Code Structure
+
+- For **Query Interfaces:**
+  - An interface subtype with generic parameter `[T any]` representing model type
+  - Concrete implementation structs embedding GORM generics
+  - Methods translating templated SQL comment bodies into executable queries with parameter and context handling
+
+- For **Model Structs:**
+  - Generated variables exposing field helpers (`field.String`, `field.Number`, or relationship fields) named after the struct
+  - These helpers enable fluent, expressive conditions and updates integrated with GORM.
+
+### User Workflow Illustration
+
+1. **Define query interface and model struct**
+
+   You write your interface with annotated SQL comments and accompanying Go structs representing the database schema.
+
+2. **Run the generator**
+
+   Execute `gorm gen` specifying the source directory.
+
+3. **Use generated query APIs**
+
+   From your application code, invoke the generated interface methods:
 
 ```go
-var User = struct {
-  ID field.Number[uint]
-  Name field.String
-  Age field.Number[int]
-}{
-  ID: field.Number[uint]{}.WithColumn("id"),
-  Name: field.String{}.WithColumn("name"),
-  Age: field.Number[int]{}.WithColumn("age"),
-}
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+users, err := generated.Query[User](db).FilterByNameAndAge("alice", 30)
 ```
 
-Your code can then build type-safe queries:
+4. **Build queries with model field helpers**
 
 ```go
-u, err := generated.Query[User](db).GetByID(ctx, 123)
-users, err := gorm.G[User](db).Where(generated.User.Age.Gt(18)).Find(ctx)
+gorm.G[User](db).
+ Where(generated.User.Name.Eq("bob")).
+ Set(generated.User.Age.Set(35)).
+ Update(ctx)
 ```
 
----
-
-## Practical Tips & Best Practices
-
-- **Organize your interfaces and models in the same package or directory** so the CLI can parse them together and relate types correctly.
-
-- **Annotate your interface methods with precise SQL templates**, using placeholders (`@@table`, `@param`) and DSL directives for conditions and updates.
-
-- **Use `genconfig.Config` for custom mappings or to control generation scope**, especially in larger projects.
-
-- **Keep your interface methods' return signatures aligned with GORM CLI expectations**: either `(T, error)` or `error`, ensuring the last return is always `error`.
-
-- **Leverage generated field helpers to build expressive, safe queries instead of hand-writing SQL strings at call sites.**
-
-- **Run the generator frequently after model or interface changes to keep generated code in sync.**
+This design seamlessly links generated code with your live GORM workflows.
 
 ---
 
-## Troubleshooting Common Issues
-
-- **Missing `context.Context` in methods?** GORM CLI injects it automatically if you omit it, so you can write simpler interface methods.
-
-- **Empty generated files?** Verify your `genconfig.Config` include/exclude filters and that your input directory contains the files you expect.
-
-- **Parsing errors?** Carefully confirm your interfaces use proper Go syntax and your SQL templates are valid.
-
-- **Incorrect output location?** Check your `-o` CLI flag and any `OutPath` values in configs.
-
----
-
-## Mermaid Diagram: Generation Flow
+## Mermaid Diagram: Generation Workflow Overview
 
 ```mermaid
 flowchart TD
-  CLIInvocation["User Runs 'gorm gen'"] --> ProcessInput["Process Input Files (Ast Parsing)"]
-  ProcessInput --> ExtractInterfaces["Extract Interfaces with SQL Templates"]
-  ProcessInput --> ExtractStructs["Extract Model Structs and Fields"]
-  ExtractInterfaces --> ApplyConfigs["Apply genconfig.Config Filters and Mappings"]
-  ExtractStructs --> ApplyConfigs
-  ApplyConfigs --> RenderTemplates["Render Go code templates for API and Helpers"]
-  RenderTemplates --> WriteFiles["Write Formatted Generated Files"]
-  WriteFiles --> Usage["Import and Use Generated Code in Your Projects"]
 
-  classDef startEnd fill:#D1E8FF,stroke:#2B7AFC,stroke-width:2px;
-  class CLIInvocation,Usage startEnd;
+  UserSource["User Source Code\n - Query Interfaces with SQL Templates\n - Model Structs"]
+  CLICommand["CLI: gorm gen -i <input> -o <output>"]
+  FileProcessing["File Parsing & AST Analysis"]
+  InterfaceExtraction["Extract Interfaces & Methods"]
+  StructExtraction["Extract Structs & Fields"]
+  ConfigProcessing["Apply genconfig.Config Filters"]
+  CodeGeneration["Render Templates to Generate Code"]
+  OutputWrite["Write & Format Generated Files"]
+  GeneratedCode["Generated Query APIs & Field Helpers"]
+  GORMIntegration["Seamless Integration with gorm.io/gorm"]
+  UserApp["User Application Code Using Generated APIs"]
+
+  UserSource -->|Input| CLICommand
+  CLICommand --> FileProcessing
+  FileProcessing --> InterfaceExtraction
+  FileProcessing --> StructExtraction
+  InterfaceExtraction --> ConfigProcessing
+  StructExtraction --> ConfigProcessing
+  ConfigProcessing --> CodeGeneration
+  CodeGeneration --> OutputWrite
+  OutputWrite --> GeneratedCode
+  GeneratedCode --> GORMIntegration
+  GORMIntegration --> UserApp
+
+  classDef userSource fill:#f9f,stroke:#333,stroke-width:2px;
+  class UserSource userSource;
+
+  class CLICommand,UserApp fill:#bbf,stroke:#333,stroke-width:1.5px;
+
+  class InterfaceExtraction,StructExtraction,ConfigProcessing,CodeGeneration,OutputWrite,GORMIntegration fill:#bfb,stroke:#333,stroke-width:1.5px;
+
+  class FileProcessing fill:#ffebcc,stroke:#333,stroke-width:1.5px;
 ```
+
+---
+
+## Practical Benefits
+
+- **Type Safety:** Generate strongly-typed APIs eliminating runtime SQL errors and reducing debugging time.
+- **Productivity:** Automate boilerplate creation for queries and updates based on interface and struct declarations.
+- **Extensibility:** Configure inclusion/exclusion and custom field wrappers through `genconfig.Config` embedded in your Go files.
+- **Seamless GORM Integration:** Use generated helpers as part of idiomatic GORM expressions without friction.
+
+---
+
+## Tips & Best Practices
+
+- Organize your query interfaces and models cleanly in packages or directories, so the generator can recursively analyze files effectively.
+- Use struct tags (`gen:"<name>"`) and type mappings in configs to customize field helper generation for specific database types (e.g., JSON fields).
+- Declare `genconfig.Config` literals to tailor generation paths and filters to fit your project structure.
+- Validate resulting code and run tests using the generated APIs to catch any mapping issues early.
+
+---
+
+## Troubleshooting Common Scenarios
+
+- **Input Path Issues:** Ensure `-i` points to valid Go source files or directories with interfaces and structs.
+- **Method Signature Validation:** Interface methods must return error as last return value, with no more than two returns.
+- **Config Filtering:** If you find interfaces or structs missing in output, check your include/exclude patterns in `genconfig.Config`.
+- **Output Location:** Verify `-o` path and config overrides to find generated code correctly.
 
 ---
 
 ## Further Reading
 
-To extend your mastery of GORM CLI generation internals, consider the following complementary concepts and guides:
+Explore related topics for deeper understanding and effective usage:
 
-- [Interface-Driven Query APIs](concepts/core-architecture/interface-query-generation)
-- [Model-Driven Field Helpers](concepts/core-architecture/model-field-helpers)
-- [Template-Based SQL Queries](guides/advanced-usage-patterns/template-queries)
-- [Customizing Code Generation with Configuration](concepts/extensibility-integration/generation-config)
-- [Using Generated Field Helpers](guides/getting-started-workflows/using-field-helpers)
+- [Core Concepts & Terminology](https://gorm.io/docs/concepts/core-concepts-terminology.html): Understanding interfaces, template DSL, field helpers.
+- [Running the Generator](https://gorm.io/docs/getting-started/run-generator.html): Practical guide for generator invocation.
+- [Using Generated APIs](https://gorm.io/docs/guides/using-generated-apis.html): Patterns for consuming generated query APIs.
+- [Customizing Code Generation](https://gorm.io/docs/guides/customizing-generation-config.html): Fine-tuning generation with `genconfig.Config`.
 
 ---
 
-With this conceptual foundation, you can confidently architect your Go codebase to fully leverage GORM CLI’s powerful, safe, and maintainable generation capabilities.
+This Architecture Overview equips you with the strategic knowledge needed to leverage GORM CLI code generation effectively, linking your Go code to safe, expressive database interactions through generated types and helpers.
