@@ -1,0 +1,286 @@
+---
+title: "Working with Field Helpers and Predicates"
+description: "Master the use of generated field helpers to create robust filters, updates, and ordering for your GORM models. Discover core usage patterns, best practices for combining predicates, and practical examples of using the generated APIs in real queries and mutations."
+---
+
+# Working with Field Helpers and Predicates
+
+Master the use of generated field helpers to create robust filters, updates, and ordering for your GORM models. Discover core usage patterns, best practices for combining predicates, and practical examples of using the generated APIs in real queries and mutations.
+
+---
+
+## 1. Understanding Field Helpers
+
+Field helpers are generated types that reflect your model's fields, providing **type-safe, compile-time checked** methods for building queries and updates. These helpers enable you to write expressive, fluent database operations without manually constructing SQL or worrying about column names.
+
+### What You Achieve with Field Helpers
+- Build **filters** (WHERE conditions) using predicate methods
+- Define **updates** with zero-values and expression setters
+- Specify **ordering** with ascending/descending calls
+- Combine predicates logically with ease
+
+### Available Field Helper Types
+- `field.Field[T]` for general/complex types
+- `field.String` for string fields
+- `field.Number[T]` for numeric types (int, float, uint)
+- `field.Bool` for boolean fields
+- `field.Time` for time/time.Time fields
+- `field.Struct[T]` and `field.Slice[T]` for associations
+
+<Note>
+Field helpers are generated alongside your models during code generation, available under a struct mapped by model name (e.g., `generated.User.Name`, `generated.User.Age`).
+</Note>
+
+---
+
+## 2. Core Predicate Methods for Filtering
+
+Each generated field helper provides methods to create compiled SQL clause expressions usable in queries.
+
+Common predicate patterns include:
+
+| Method           | Purpose                                                   | Example                                 |
+|------------------|-----------------------------------------------------------|-----------------------------------------|
+| `Eq(value)`      | Equals comparison (field = value)                         | `generated.User.Age.Eq(18)`              |
+| `Neq(value)`     | Not equals (field != value)                                | `generated.User.Role.Neq("admin")`    |
+| `IsNull()`       | Checks for SQL NULL                                       | `generated.User.Score.IsNull()`          |
+| `IsNotNull()`    | Checks for SQL NOT NULL                                   | `generated.User.LastLogin.IsNotNull()`  |
+| `Like(pattern)`  | LIKE operator (for string fields)                         | `generated.User.Name.Like("%foo%")`   |
+| `Between(a,b)`   | BETWEEN operator for ranges                               | `generated.User.Age.Between(18, 30)`    |
+
+These expressions can be combined with GORM's `Where(...)` method to filter queries safely.
+
+### Example: Filtering Users Older Than 18 With Role = "active"
+
+```go
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Find(ctx)
+```
+
+This generates SQL roughly equivalent to:
+
+```sql
+SELECT * FROM users WHERE age > 18 AND role = 'active';
+```
+
+<Check>
+Filters are type-safe and checked at compile time, preventing SQL injection and typos.
+</Check>
+
+---
+
+## 3. Using Setters for Updates and Creates
+
+Field helpers also provide assignment expressions to construct update and create operations using `Set(...)` fluent APIs.
+
+| Method           | Purpose                                                    | Example                                              |
+|------------------|------------------------------------------------------------|------------------------------------------------------|
+| `Set(value)`     | Set field to a value (including zero or null)              | `generated.User.Name.Set("alice")`                  |
+| `SetExpr(expr)`  | Set field to SQL expression or another field/expression    | `generated.User.Age.SetExpr(clause.Expr{SQL: "GREATEST(age, 18)"})` |
+| `Incr(n)`        | Increment numeric field by `n` (via Assigner interface)     | `generated.User.Age.Incr(1)`                           |
+
+### Example: Incrementing Age and Updating Role
+
+```go
+rows, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(
+        generated.User.Age.Incr(1),
+        generated.User.Role.Set("active"),
+    ).
+    Update(ctx)
+```
+
+This runs UPDATE users SET age = age + 1, role = 'active' WHERE name = 'bob';
+
+### Setting Zero Values
+To explicitly set a field to zero value (e.g., empty string, 0, false, or NULL for nullable types), use `Set(...)` directly with the zero value.
+
+Example:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice")).
+  Set(
+    generated.User.Age.Set(0),
+    generated.User.IsAdult.Set(false),
+    generated.User.Score.Set(sql.NullInt64{}),
+  ).
+  Update(ctx)
+```
+
+<Warning>
+Using zero or empty values without `Set` will **not** update those fields, so always use `Set` explicitly to persist zero values.
+</Warning>
+
+---
+
+## 4. Ordering Queries
+
+Field helpers support constructing ORDER BY clauses via:
+
+- `Asc()` — ascending order
+- `Desc()` — descending order
+- `OrderExpr(sql string, vars ...any)` — custom order expressions
+
+### Example: Fetch Users Ordered by CreatedAt Descending
+
+```go
+users, err := gorm.G[models.User](db).
+    Order(generated.User.CreatedAt.Desc()).
+    Find(ctx)
+```
+
+Generates SQL like:
+
+```sql
+SELECT * FROM users ORDER BY created_at DESC;
+```
+
+---
+
+## 5. Combining Predicates and Advanced Filtering
+
+You can supply multiple predicates to `Where(...)` and combine expressions using logical operators.
+Field helpers for boolean fields also provide helpers such as `AndExpr()`, `OrExpr()`, `Not()` for direct logical composition.
+
+Example:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.IsAdult.AndExpr(generated.User.Role.Eq("active"))).
+  Find(ctx)
+```
+
+This creates a composite condition equivalent to: `(is_adult AND role = 'active')`.
+
+Alternatively, write with multiple predicates:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.IsAdult.Eq(true), generated.User.Role.Eq("active")).
+  Find(ctx)
+```
+
+Both ways achieve AND semantics.
+
+---
+
+## 6. Practical Usage Patterns
+
+### Filtering with Multiple Conditions
+
+To find users age > 18 and role active:
+
+```go
+var activeAdults []models.User
+err := gorm.G[models.User](db).
+    Where(
+       generated.User.Age.Gt(18),
+       generated.User.Role.Eq("active"),
+    ).
+    Find(ctx)
+```
+
+### Updating with Set Expressions
+
+Increment Bob's age by 1 in one step:
+
+```go
+rows, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(generated.User.Age.Incr(1)).
+    Update(ctx)
+```
+
+### Creating With Set Assignments
+
+Create a new user with a preset name and role:
+
+```go
+err := gorm.G[models.User](db).
+    Set(
+       generated.User.Name.Set("alice"),
+       generated.User.Role.Set("active"),
+    ).
+    Create(ctx)
+```
+
+---
+
+## 7. Best Practices & Tips
+
+- **Always use field helpers over raw SQL strings** to maintain compile-time safety and discoverability.
+- **Explicitly Set zero values** with `.Set(...)` to avoid silent no-ops when updating fields to empty/zero.
+- Combine predicates by passing multiple expressions to `.Where(...)` rather than concatenating SQL strings.
+- Use `.IsNull()` and `.IsNotNull()` predicates for nullable fields, especially SQL Null* types like `sql.NullInt64`.
+- Use field helpers' **logical methods for boolean fields** (`AndExpr`, `OrExpr`, etc.) for expressive and readable filters.
+- Use `.SetExpr()` for complex update expressions or SQL functions.
+
+---
+
+## 8. Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Common Issues">
+<Accordion title="Zero Values Are Not Updating"> 
+If an update with zero values does not change the database, verify you are explicitly using `.Set(zeroValue)` for those fields. Omitting `.Set` means fields are ignored if zero.
+</Accordion>
+<Accordion title="Filters Are Not Applied as Expected">
+Check that predicates are passed correctly as separate parameters to `.Where()` and not combined inside a single raw string. Extra care is needed when using `.Expr()` or custom conditions.
+</Accordion>
+<Accordion title="Incorrect Column Names or Field Mapping">
+Confirm you regenerate the field helpers after model struct changes. Use configured `genconfig.Config` to customize field types and mapping if needed.
+</Accordion>
+<Accordion title="Compilation Errors Using Generated Helpers">
+Make sure you have generated the latest code and imported the correct generated package. Check gone packages or updated models.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 9. Next Steps & Related Guides
+
+- Dive deeper into **[Managing Associations in Generated Code](/guides/core-workflows/associations-in-depth)** to combine field helpers with relational operations.
+- Explore **[Building Template-Based Query APIs](/guides/core-workflows/template-based-queries)** for advanced query composition.
+- Customize generation behaviors via **[Customizing Generation with genconfig](/guides/advanced-usage/customizing-generation)**.
+- Learn about **[Handling JSON Columns and Custom Helpers](/guides/advanced-usage/working-with-json-fields)** for non-standard field types.
+
+---
+
+## Appendix: Example Snippet Using Field Helpers
+
+```go
+// 1. Filter: Find users named "jinzhu" older than 18
+users, err := gorm.G[models.User](db).
+    Where(
+        generated.User.Name.Eq("jinzhu"),
+        generated.User.Age.Gt(18),
+    ).
+    Find(ctx)
+
+// 2. Update: Set role active, increment Age by 1 for users named bob
+_, err = gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(
+        generated.User.Role.Set("active"),
+        generated.User.Age.Incr(1),
+    ).
+    Update(ctx)
+
+// 3. Create: New user with name alice and age 20
+err = gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Age.Set(20),
+        generated.User.IsAdult.Set(true),
+    ).
+    Create(ctx)
+
+// 4. Order by CreatedAt descending
+users, err = gorm.G[models.User](db).
+    Order(generated.User.CreatedAt.Desc()).
+    Find(ctx)
+```
+
+---
