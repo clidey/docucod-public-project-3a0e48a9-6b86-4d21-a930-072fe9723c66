@@ -1,0 +1,213 @@
+---
+title: "Set Up Your Models & Query Interfaces"
+description: "Define your GORM models and query interfaces in a compatible directory/package structure. Clarifies best practices for file layout and demonstrates example model and interface declarations."
+---
+
+# Set Up Your Models & Query Interfaces
+
+Defining your GORM models and query interfaces correctly is the foundation for generating type-safe, expressive APIs with GORM CLI. This guide walks you through the best practices for organizing your directory and package structure and provides concrete examples of how to declare your models and interfaces to ensure seamless code generation.
+
+---
+
+## 1. Directory & Package Layout
+
+GORM CLI processes Go files to generate code based on the declared interfaces and models within a directory or package. Organizing your files properly ensures the generator picks up all relevant definitions and applies optional configuration overrides.
+
+### Best Practices
+
+- **Co-locate models and interfaces**: Place your data model structs and query interfaces in the same directory or Go package whenever possible. This makes resolution straightforward and helps automatic config discovery.
+- **Use subdirectories for domain separation**: For larger projects, use subdirectories for logical grouping (e.g., `examples/models`, `examples/filters`). GORM CLI will process all files recursively if the input path is a directory.
+- **Apply generation configuration per package**: You can override generation behavior by declaring a `genconfig.Config` variable in a package-level Go file, which applies to all source files in that directory subtree.
+
+### Example File Layout
+
+```plaintext
+/examples
+ ├─ models
+ │    └─ user.go
+ ├─ filters
+ │    ├─ pattern
+ │    │   └─ config.go
+ │    ├─ twolevel
+ │    │   └─ config.go
+ │    └─ twolevel
+ │        └─ nested
+ │            └─ config.go
+ └─ query.go
+```
+
+In this structure, the generator picks up all models and interfaces in `/examples` and applies configuration settings declared in `config.go` files where relevant.
+
+---
+
+## 2. Declaring Your Models
+
+Models define your database schema and field types. GORM CLI scans model structs to produce model-driven field helpers which support fluent filtering, updates, and association operations.
+
+### Defining Basic Models
+
+- Use standard Go structs with exported fields.
+- Tag fields with GORM tags (`gorm:""`) as usual.
+- Optionally include `gen:""` struct tags to influence field helper mapping.
+
+#### Example: User Model
+
+```go
+package models
+
+import "gorm.io/gorm"
+
+// User represents a user record in the database
+// with common fields like ID, Name, and Age.
+type User struct {
+  gorm.Model
+  Name  string
+  Age   int
+  Email string
+}
+```
+
+#### Custom JSON Field Example
+
+To map a field to a custom JSON field helper, tag it with `gen:"json"` and define a related helper type as described in the [JSON Field Mapping Example](#).
+
+```go
+package models
+
+type User struct {
+  Profile string `gen:"json"`
+}
+```
+
+---
+
+## 3. Defining Your Query Interfaces
+
+Query interfaces declare methods with SQL template annotations in their documentation comments. GORM CLI generates type-safe implementations based on these.
+
+### Interface Method SQL Template Syntax
+
+- Use Go interface methods with comments containing SQL or templated SQL.
+- Parameters are automatically mapped by name to SQL named parameters.
+- Return types should include data and error as appropriate.
+
+### Example Query Interface
+
+```go
+package examples
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{if @user.Name }} name=@user.Name {{end}}
+  //   {{if @user.Age > 0}} AND age=@user.Age {{end}}
+  // {{end}}
+  SearchUsers(user User) ([]T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  //   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateUser(user User, id int) error
+}
+```
+
+---
+
+## 4. How GORM CLI Uses Models & Interfaces Together
+
+The CLI tool scans your specified source directory or files, identifies all interfaces with SQL template comments and all model structs, then generates:
+
+- **Interface-driven query APIs**: Strongly typed query method implementations with fluent, type-safe use.
+- **Model-driven field helpers**: Helper objects per model field to build expressive filters, updates, and associations.
+
+This combination enables compile-time safety and rich API discoverability.
+
+---
+
+## 5. Configuration Tips & Best Practices
+
+To get precise control over code generation, you can add a `genconfig.Config` variable in the same package as your models/interfaces.
+
+### What You Can Configure
+
+- **Output path** (`OutPath`): Where generated files are placed.
+- **Field type mappings** (`FieldTypeMap`): Map Go types to custom field helpers.
+- **Field name mappings** (`FieldNameMap`): Map `gen:""` struct tags to custom helpers.
+- **Interface and struct inclusion/exclusion**: Control which interfaces and structs are processed.
+- **File-level scope**: Limit config to the file instead of the package.
+
+### Example Configuration
+
+```go
+package examples
+
+import (
+  "database/sql"
+  "gorm.io/cli/gorm/field"
+  "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+  OutPath: "examples/output",
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+  },
+  FieldNameMap: map[string]any{
+    "json": JSON{},
+  },
+  IncludeInterfaces: []any{"Query*"},
+}
+```
+
+---
+
+## 6. Common Pitfalls & Troubleshooting
+
+<AccordionGroup title="Common Issues When Setting Up Models & Interfaces">
+<Accordion title="My methods do not generate code - empty output files">
+- Ensure your interface methods have proper SQL template comments.
+- Verify the method returns `(T, error)` or `error` as appropriate.
+- Check that the interface type is included (matches include pattern or not excluded).
+</Accordion>
+<Accordion title="Fields not mapped to expected helper types">
+- Confirm `FieldTypeMap` and `FieldNameMap` in your config are set correctly.
+- Remember to annotate struct fields with the `gen` tag if needed.
+- Ensure your custom helpers are defined correctly and imported.
+</Accordion>
+<Accordion title="Generation outputs to unexpected directory">
+- Verify the `OutPath` setting in your `genconfig.Config`.
+- Check if any configs at higher directory levels override `OutPath`.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 7. Next Steps
+
+- Proceed to [Generate Type-Safe APIs](getting-started/initial-usage/basic-generation) to learn how to run the generator with your models and interfaces.
+- Explore [Using the Generated Code](getting-started/initial-usage/use-generated-code) to integrate generated APIs into your application.
+- Review the [Generation Config](concepts/configuration-and-extensibility/generation-config) concepts to refine generation behavior.
+
+---
+
+## References and Related Documentation
+
+- [GORM CLI README and QuickStart](README.md)
+- [Generation Workflow Explanation](overview/integration-and-use/generation-workflow)
+- [Generation Configuration Customization](concepts/configuration-and-extensibility/generation-config)
+- [Working with Model-Driven Field Helpers](guides/core-workflows/model-field-helpers)
+- [Template DSL Guide for Method SQL](guides/advanced-usage/template-dsl)
+
+---
+
+For questions or support, consult the official repository and community forums at: [https://github.com/go-gorm/cli](https://github.com/go-gorm/cli)
