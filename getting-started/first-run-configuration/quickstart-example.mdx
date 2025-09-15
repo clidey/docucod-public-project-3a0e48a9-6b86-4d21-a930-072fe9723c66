@@ -1,0 +1,193 @@
+---
+title: "Quickstart: End-to-End Example"
+description: "Jumpstart with a complete example: from defining models and interfaces through running the code generator and utilizing the output in a typical query. Ideal for users who learn by doing and want to see immediate, practical results."
+---
+
+# Quickstart: End-to-End Example
+
+Jumpstart your GORM CLI experience with a practical, hands-on example that spans from defining your models and interfaces to running the code generator and using the generated APIs in a typical query. This guide is designed to help you see immediate, concrete results by walking through a realistic user flow.
+
+---
+
+## 1. Define Your Models and Query Interface
+
+Start by creating your Go model structs and query interfaces with embedded SQL templates in comments. This setup enables GORM CLI to generate type-safe query APIs matching your data schema and query needs.
+
+### Example Model: User
+
+```go
+package models
+
+import "gorm.io/gorm"
+
+type User struct {
+    gorm.Model
+    Name    string
+    Age     int
+    Role    string
+    IsAdult bool
+    Profile string `gen:"json"` // Use custom JSON field helper
+}
+```
+
+### Example Query Interface
+
+```go
+package examples
+
+// Query defines user-related queries with SQL templates in comments.
+type Query[T any] interface {
+    // SELECT * FROM @@table WHERE id=@id
+    GetByID(id int) (T, error)
+
+    // SELECT * FROM @@table WHERE @@column=@value
+    FilterWithColumn(column string, value string) (T, error)
+
+    // SELECT * FROM @@table WHERE JSON profile vip flag is true
+    // This example shows dialect-aware JSON query using a custom helper
+    GetVIPUser() (T, error)
+}
+```
+
+> Use the `gen:"json"` tag on JSON fields to enable custom JSON query helpers that handle different databases transparently.
+
+## 2. Configure the Generator (Optional but Recommended)
+
+Place a package-level `genconfig.Config` definition to customize output directory, type mappings, and inclusion filters. This example maps the `json` tag field to a JSON helper and places generated code under `examples/output`.
+
+```go
+package examples
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "examples/output",
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+    FieldNameMap: map[string]any{
+        "json": JSON{}, // Custom JSON helper to manage JSON fields
+    },
+}
+```
+
+
+## 3. Run the GORM CLI Generator
+
+Execute the generation command in your terminal, specifying the path to your interface file with the `-i` flag and the output folder with the `-o` flag.
+
+```bash
+gorm gen -i ./examples -o ./examples/output
+```
+
+**What this does:**
+- Parses your interface methods with SQL annotations.
+- Generates concrete implementations with type-safe method signatures.
+- Produces model-based field helpers for building queries fluently.
+
+<Tip>
+Ensure the input path (`-i`) points to the directory or file containing your interface declarations. The output path (`-o`) defaults to `./g` if not specified.
+</Tip>
+
+## 4. Use Generated Code in Your Project
+
+Import the generated package and run queries using the strongly typed APIs. Here's how to get a user by ID and how to filter users by JSON field using the generated helpers.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "gorm.io/driver/mysql"
+    "gorm.io/gorm"
+
+    "gorm.io/cli/gorm/examples/models"
+    generated "gorm.io/cli/gorm/examples/output/models"
+)
+
+func main() {
+    dsn := "gorm:gorm@tcp(127.0.0.1:9910)/gorm?parseTime=true&charset=utf8mb4&loc=Local"
+    db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+    if err != nil {
+        panic(fmt.Sprintf("failed to connect mysql: %v", err))
+    }
+
+    ctx := context.Background()
+
+    // Get user by ID using the generated Query API
+    user, err := generated.Query[models.User](db).GetByID(ctx, 1)
+    if err != nil {
+        fmt.Printf("Error fetching user: %v\n", err)
+        return
+    }
+    fmt.Printf("User #1: %+v\n", user)
+
+    // Query for users with JSON profile vip flag set to true
+    vipUser, err := gorm.G[models.User](db).
+        Where(generated.User.Profile.Equal("$.vip", true)).
+        Take(ctx)
+    if err != nil {
+        fmt.Printf("Error fetching VIP user: %v\n", err)
+        return
+    }
+    fmt.Printf("VIP user found: %+v\n", vipUser)
+}
+```
+
+### Explanation
+- `generated.Query[models.User](db)`: Instantiates the generated Query API for the `User` model.
+- `GetByID(ctx, 1)`: Runs the `GetByID` query defined in your interface.
+- `generated.User.Profile.Equal("$.vip", true)`: Uses the JSON field helper to build a dialect-specific JSON query.
+
+## 5. Verify the Generation and Query Results
+
+- Inspect the `examples/output/models/user.go` and other generated files to understand the generated interfaces and helpers.
+- Run your application and confirm queries return expected data without compilation errors.
+
+
+## Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Quickstart Errors">
+<Accordion title="Generator 'input' flag not specified error">
+Make sure you specify the `-i` flag pointing to the exact interface file or directory.
+Example:
+```bash
+gorm gen -i ./examples -o ./examples/output
+```
+</Accordion>
+<Accordion title="Database connection errors">
+Verify your DSN string and database server are reachable:
+- Check your `MYSQL_DSN` environment variable or hardcoded DSN.
+- Confirm your database is running on the expected port and credentials.
+</Accordion>
+<Accordion title="Compilation errors with generated code">
+- Ensure your model and interface definitions use correct package imports.
+- Confirm `genconfig.Config` mappings for custom types like JSON are properly declared.
+- Clean your output directory and regenerate.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Summary
+
+This guide showcased the complete user flow: defining models/interfaces, configuring the generator, running the CLI, and using the generated queries effectively. By following this quickstart, you gain a fully functional type-safe codebase that improves productivity and prevents runtime errors in data access.
+
+For deeper dives, see related guides on [Your First Code Generation](https://gorm.io/docs/getting-started/first-run-configuration/your-first-generate), [Using Generated APIs](https://gorm.io/docs/guides/getting-started/using-generated-apis), and [Custom Field Helpers](https://gorm.io/docs/concepts/custom-field-helpers).
+
+---
+
+## Additional Resources
+
+- [GORM CLI GitHub Repository](https://github.com/go-gorm/cli)
+- [GORM Official Documentation](https://gorm.io/docs/)
+- [SQL Template DSL Reference](https://gorm.io/docs/real-world-examples/template-sql-dsl)
+
+---
+
+Happy coding! Empower your GORM projects with type-safe, expressive generated code from day one.
