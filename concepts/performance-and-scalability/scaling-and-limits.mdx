@@ -1,0 +1,254 @@
+---
+title: "Scaling with Large Models and Teams"
+description: "Find practical tips for handling large schemas, advanced associations, and multi-package setups. See how inclusion/exclusion, file-level configs, and modular generation enable collaboration and maintainability."
+---
+
+# Scaling with Large Models and Teams
+
+Handling large schemas, complex associations, and multi-package projects requires thoughtful configuration and architectural practices in GORM CLI. This guide equips you with practical strategies and tips to maintain code manageability, ensure efficient collaboration, and keep generation performant as your project scales.
+
+---
+
+## Understanding the Challenges of Large-Scale Code Generation
+
+As your Go project grows in size and complexity, code generation can become harder to manage due to:
+
+- Many model structs with numerous fields and intricate relationships
+- Numerous query interfaces with advanced SQL templates
+- Multiple packages or nested directories with separate configurations
+- The need for granular inclusion/exclusion of generated code per interface or struct
+- Collaboration among multiple developers working on overlapping codebases
+
+GORM CLI provides powerful configuration mechanisms and modular generation workflows designed to address these challenges.
+
+---
+
+## Modular Generation with File-Level and Package-Level Configurations
+
+### Package-Level Configuration
+
+By default, placing a `genconfig.Config` variable at the package level applies configuration to the entire package (directory).
+
+- Use this to define shared settings such as output paths, global inclusion/exclusion patterns, and field mappings.
+- Example: Setting all files in a package to generate output into a specific directory.
+
+```go
+var _ = genconfig.Config{
+    OutPath: "examples/output",
+    IncludeInterfaces: []any{"Query*"},
+}
+```
+
+### File-Level Configuration
+
+Set the `FileLevel` option in your config to `true` to restrict application only to the current Go source file.
+
+- Enables finer-grained control in multi-package or nested directory structures.
+- Useful when different Go files within the same package require different generation policies.
+
+Example to exclude certain interfaces in a file:
+
+```go
+var _ = genconfig.Config{
+    FileLevel: true,
+    ExcludeInterfaces: []any{"Deprecated*"},
+}
+```
+
+### Config Application Logic
+
+- When generating, GORM CLI collects all configurations from files in your input path.
+- File-level configurations override package-level settings within their location.
+- Inclusion and exclusion filters are applied cumulatively, with **Include** taking precedence over **Exclude**.
+
+<Info>
+Fine control of configurations enables partitioning of your code generation in large monorepos or multi-module repos.
+</Info>
+
+---
+
+## Inclusion and Exclusion Patterns for Precise Generation
+
+You can specify which interfaces and structs should be included or excluded from generation using patterns or explicit type references.
+
+- Supports `glob`-style wildcards (`*`), type literals (e.g., `models.User{}`), and interface conversion forms (`models.Query(nil)`).
+- Priority is given to inclusion lists; if any inclusion list is non-empty, exclusion lists are ignored.
+
+Example:
+
+```go
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"Query*", models.Query(nil)},
+  ExcludeInterfaces: []any{"*Deprecated*"},
+  IncludeStructs:    []any{"User", "Account*"},
+  ExcludeStructs:    []any{"*DTO"},
+}
+```
+
+This config:
+
+- Includes interfaces whose names start with "Query" or exactly `models.Query`.
+- Excludes interfaces matching `*Deprecated*` only if no interfaces are included otherwise.
+- Includes structs named exactly "User" and those matching "Account*".
+- Excludes structs matching "*DTO" if no includes exist.
+
+<Warning>
+Avoid overlapping patterns that might unintentionally filter out important types.
+Maintain clear naming conventions when working with large model sets.
+</Warning>
+
+---
+
+## Multi-Package and Nested Directory Generation
+
+In large projects, models and interfaces can span multiple packages and nested directories. GORM CLI supports:
+
+- Recursively walking input directories and processing all Go files.
+- Mapping file relative paths to output structure, preserving directory layouts.
+- Applying package or file-level configurations independently.
+
+### Best Practices
+
+- Place a package-level `genconfig.Config` in each package or subdirectory to control generation.
+- Use `FileLevel` to differentiate configs between files in the same package.
+- Structure your repository so that logical grouping of models and query interfaces aligns with package boundaries.
+
+### Example Directory Layout
+
+```plaintext
+myproject/
+├── models/
+│   ├── user.go
+│   ├── company.go
+│   └── config.go (with package-level config)
+├── queries/
+│   ├── user_queries.go
+│   ├── company_queries.go
+│   └── config.go (with config specific to queries)
+└── nested/
+    ├── pattern/
+    │   ├── config.go (file-level config)
+    │   ├── user.go
+    │   └── admin.go
+    └── another/
+        └── config.go
+```
+
+This layout supports isolation and targeted generation within each package or nested subfolder.
+
+---
+
+## Handling Large and Complex Associations
+
+GORM CLI generates powerful association helpers for managing relationships such as has one, has many, belongs to, and many-to-many.
+
+When working with large schemas:
+
+- Generated association helpers are strongly typed and fluent, making managing nested relations manageable.
+- Use batching methods like `CreateInBatch` to efficiently insert many related records.
+- Use filtering with `.Where()` on associations to target updates/unlinks/deletes.
+
+### Example: Batch Creation of Associated Entities
+
+```go
+// Create a user with multiple pets and languages linked
+err := gorm.G[User](db).
+    Set(
+        generated.User.Name.Set("polyglot"),
+        generated.User.Pets.CreateInBatch([]Pet{{Name: "Fido"}, {Name: "Rex"}}),
+        generated.User.Languages.CreateInBatch([]Language{{Code: "EN"}, {Code: "FR"}}),
+    ).
+    Create(ctx)
+```
+
+### Best Practices
+
+- Keep associations pointed to by pointers (`*Struct`) or slices (`[]Struct`) properly tagged in your Go models to ensure accurate generation.
+- Use polymorphic and many-to-many tags explicitly in your models.
+- Leverage generated helpers to avoid writing complex manual SQL for relational operations.
+
+<Note>
+Large association graphs are supported with type-safe operations, improving safety and reducing runtime errors.
+</Note>
+
+---
+
+## Practical Tips for Managing Large Code Generation Projects
+
+- **Explicit Configuration:** Always declare clear `genconfig.Config` for each package or file for predictable generation.
+- **Incremental Generation:** Generate code for subsets of your codebase during development to speed up iteration.
+- **Use Whitelists:** Prefer inclusion lists (`IncludeInterfaces` / `IncludeStructs`) over broad exclusions for precise targeting.
+- **Naming Conventions:** Maintain consistent interface and struct naming with predictable prefixes or patterns to simplify filtering.
+- **Review Generated Output:** Regularly review generated code to catch unintended omissions or errors early.
+- **Collaboration:** Agree on shared config standards within your team to avoid conflicts and overlapping generation.
+
+---
+
+## Troubleshooting Large Scale Code Generation
+
+- **No Output Generated:** Ensure your include/exclude patterns are not filtering out all targets.
+- **Config Not Applied:** Verify `FileLevel` is correctly set to control the scope.
+- **Performance Issues:** Split your input into smaller packages or directories and run multiple generation commands separately.
+- **Conflicting Field Mappings:** Check for duplicate keys in `FieldTypeMap` and `FieldNameMap` across configs.
+
+Refer to the [Basic Configuration Options](https://gorm.io/docs/concepts/data-and-model-concepts/configuration) and [Validation & Troubleshooting](https://gorm.io/docs/getting-started/first-codegen-workflow/validation-troubleshooting) guides for more detailed validation and debugging help.
+
+---
+
+## Summary Diagram: Code Generation and Configuration Flow in Large Projects
+
+```mermaid
+flowchart TD
+  subgraph "User Source Code"
+    Models["Model Go Files
+ (Structs with Fields & Tags)"]
+    Interfaces["Query Interfaces
+ (With SQL Templates)"]
+    Configs["genconfig.Configs
+ (Package/File Level)"]
+  end
+
+  subgraph "GORM CLI Generator"
+    Parser["Parse Files and AST
+Extract Interfaces, Structs, Configs"]
+    ConfigResolver["Apply Configuration
+Merge Package & File-Level"]
+    Filter["Include/Exclude
+Apply Whitelist/Blacklist"]
+    CodeGen["Generate Type-Safe
+Query APIs & Field Helpers"]
+    Formatter["Code Formatting
+with imports.Process"]
+  end
+
+  Output["Generated Code
+(Output Dir + Subdirs)"]
+
+  Models --> Parser
+  Interfaces --> Parser
+  Configs --> Parser
+  Parser --> ConfigResolver
+  ConfigResolver --> Filter
+  Filter --> CodeGen
+  CodeGen --> Formatter
+  Formatter --> Output
+
+  style Models fill:#f9f,stroke:#333,stroke-width:1px
+  style Interfaces fill:#ccf,stroke:#333,stroke-width:1px
+  style Configs fill:#cfc,stroke:#333,stroke-width:1px
+  style Output fill:#ffe,stroke:#333,stroke-width:1px
+  style "GORM CLI Generator" fill:#eef,stroke:#333,stroke-dasharray: 5 5
+```
+
+---
+
+## Next Steps and Related Documentation
+
+- Explore [Basic Configuration Options](https://gorm.io/docs/concepts/data-and-model-concepts/configuration) to master filtering and customization.
+- Dive into [Working with Associations](https://gorm.io/docs/guides/advanced-patterns/association-helpers) to leverage generated association helpers efficiently.
+- For multi-package workflows, review [Running the Code Generator](https://gorm.io/docs/getting-started/first-codegen-workflow/generate-code) and [Preparing Models & Query Interfaces](https://gorm.io/docs/getting-started/first-codegen-workflow/prepare-models-interfaces).
+- Learn [Best Practices for SQL Template DSL](https://gorm.io/docs/guides/advanced-patterns/templating-dsl) for complex query methods.
+
+---
+
+This page empowers you to scale your use of GORM CLI through modular configurations, inclusion/exclusion patterns, and best practices aligned with multi-package Go projects. These strategies maintain maintainability and collaboration across large teams and complex schemas.
