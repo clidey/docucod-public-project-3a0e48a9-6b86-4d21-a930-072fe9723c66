@@ -1,0 +1,271 @@
+---
+title: "Using Generated APIs"
+description: "Walks users through integrating and invoking the generated type-safe APIs in their Go application, demonstrating common usage patterns for queries, updates, and associations. Provides live code examples mapped to generated output."
+---
+
+# Using Generated APIs
+
+This guide walks you through integrating and invoking the generated type-safe APIs from GORM CLI in your Go applications. You will learn how to perform common operations such as querying, updating, and working with associations using the generated code. Live code examples illustrate how your interface definitions and models translate into practical, fluent API calls.
+
+---
+
+## Overview
+
+After you define your SQL-annotated interfaces and models, and run GORM CLI's code generator, you'll get:
+
+- **Query API implementations**: Type-safe functions to execute your declared SQL queries.
+- **Model-based field helpers**: Strongly typed field predicates and setters for building filters and specifying updates.
+- **Association helpers**: Methods for managing related data, such as creating linked records, updating associations, or unlinking/deleting relations.
+
+This page focuses solely on using these generated APIs to interact with your database through `gorm.io/gorm`.
+
+---
+
+## 1. Accessing Generated Query Interfaces
+
+Each interface you define with SQL templates results in a function with the same name returning a typed implementation bound to a `*gorm.DB` instance.
+
+### Example Interface Definition
+```go
+// Query[T any] is your generic query interface
+// defined in your source package
+//
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // Additional query methods ...
+}
+```
+
+### Using the Generated Implementation
+```go
+// Assuming import of generated package
+import "generated"
+
+// Initialize GORM DB handle 'db' and context 'ctx'
+
+// Create an instance bound to your DB
+query := generated.Query[User](db)
+
+// Call your method with parameters
+user, err := query.GetByID(ctx, 123)
+if err != nil {
+  // handle error
+}
+
+fmt.Println("User:", user)
+```
+
+---
+
+## 2. Using Field Helpers for Queries and Updates
+
+The generator creates a global struct variable named after your model containing field helpers for each column.
+
+### Field Helper Usage
+```go
+import generated "generated"
+
+// Filtering users with age greater than 18
+users := []User{}
+err := gorm.G[User](db).
+  Where(generated.User.Age.Gt(18)).
+  Find(ctx, &users)
+
+// Updating a user’s name where id = 1
+err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Name.Set("newname")).
+  Update(ctx)
+```
+
+### Fluent API Benefits
+- Expressive predicates: `Eq()`, `Gt()`, `Between()`, `Like()`, etc.
+- Zero-value-safe setters: Explicit `Set()` prevents accidental omissions
+- Expression setters: Use `SetExpr()` for complex SQL
+
+---
+
+## 3. Working with Associations
+
+Association fields generate specialized helpers typed appropriately for single-entity (`field.Struct[T]`) or collection (`field.Slice[T]`). These provide operations to:
+
+- `Create`: Insert related rows and associate them
+- `CreateInBatch`: Batch create multiple linked records
+- `Update`: Update associated records conditionally
+- `Unlink`: Remove association links (nullable FK or join table rows)
+- `Delete`: Delete associated rows or join table links
+
+### Examples
+```go
+// Create a new user with one pet
+err = gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Update a pet named 'fido' for user ID 1
+err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+    Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+// Unlink all pets from user ID 1
+err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+### Semantics Summary
+| Association Type | Unlink Effect           | Delete Effect             |
+| ---------------- | ----------------------- | ------------------------- |
+| belongs to       | Sets parent FK to NULL  | Deletes associated rows   |
+| has one/has many | Sets child FK to NULL   | Deletes child rows        |
+| many2many        | Removes join table rows | Removes join table rows   |
+
+---
+
+## 4. Invoking Generated Query Methods with SQL Templates
+
+Your interface methods with embedded SQL templates become implemented methods on the `Query[T]` type.
+
+### Example
+```go
+// Interface declares
+//   SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (T, error)
+
+// Usage
+user, err := generated.Query[User](db).GetByID(ctx, 10)
+if err != nil {
+  // Handle error
+}
+fmt.Println(user)
+```
+
+### More Complex Queries
+```go
+// Using filter with slice argument
+users, err := generated.Query[User](db).Filter(ctx, []User{{Name: "jinzhu", Age: 25}})
+
+// Update user info
+err = generated.Query[User](db).UpdateInfo(ctx, User{Name: "jinzhu", Age: 20}, 1)
+```
+
+The generated methods handle context injection automatically, bind parameters safely using placeholders, and return typed results.
+
+---
+
+## 5. Practical Tips and Best Practices
+
+- Always pass `ctx context.Context` to generated query methods for cancellation and tracing.
+- Use field helpers for building `Where` clauses instead of raw strings for compile-time safety.
+- Use association helpers to manage relationships to avoid manual FK management.
+- When updating related data, combine `Set` with `Where` to target specific associations.
+- To batch create or link multiple related rows, use `CreateInBatch` with slices.
+
+---
+
+## 6. Troubleshooting Common Issues
+
+<AccordionGroup title="Common Troubleshooting Topics">
+<Accordion title="Method Not Found After Generation">
+- Confirm your interface is included in generation (check `IncludeInterfaces` config).
+- Verify the generated code is up to date by rerunning `gorm gen` with correct input and output paths.
+</Accordion>
+<Accordion title="Errors Executing Query Methods">
+- Always check for errors returned from generated functions.
+- Inspect SQL logs enabled by GORM for unexpected query issues.
+- Verify model struct tags align with your database schema.
+</Accordion>
+<Accordion title="Association Operations Not Affecting Related Rows">
+- Ensure association helpers match relation types exactly.
+- Use `Where` clause on associations to filter target rows before `Update`/`Unlink`/`Delete`.
+</Accordion>
+<Accordion title="Type Mismatch or Ambiguous Field Helper">
+- Review your model struct field types and any custom `gen` tags affecting helper mapping.
+- Check your `FieldTypeMap` and `FieldNameMap` configuration for overrides.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 7. Next Steps
+
+- Explore [Basic Configuration](/getting-started/onboarding-core/basic-configuration) to customize generation paths and overrides.
+- Dive deeper into [Working with Associations: Create, Update, Unlink, Delete](/guides/core-usage-patterns/association-operations) for complex relation management scenarios.
+- Learn advanced usage of [Template-Based Queries](/guides/core-usage-patterns/template-based-queries) for custom SQL operations.
+
+For foundational understanding, return to the [Product Overview](/overview/introduction-core-concepts/product-overview) and [Your First Code Generation](/getting-started/onboarding-core/first-code-generation) guides.
+
+---
+
+# Appendix: Complete Minimal Usage Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "gorm.io/driver/sqlite"
+    "gorm.io/gorm"
+
+    "generated" // Import your generated package
+)
+
+type User struct {
+    ID   uint
+    Name string
+    Age  int
+}
+
+func main() {
+    ctx := context.Background()
+
+    db, err := gorm.Open(sqlite.Open("test.db"), &gorm.Config{})
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Use generated API
+    query := generated.Query[User](db)
+
+    // Query by ID
+    user, err := query.GetByID(ctx, 42)
+    if err != nil {
+        log.Fatalf("Query error: %v", err)
+    }
+    fmt.Printf("Found user: %+v\n", user)
+
+    // Update user name
+    err = gorm.G[User](db).
+        Where(generated.User.ID.Eq(42)).
+        Set(generated.User.Name.Set("newname")).
+        Update(ctx)
+    if err != nil {
+        log.Fatalf("Update error: %v", err)
+    }
+}
+```
+
+This example shows how generated code tightly integrates with GORM's existing fluent interface, providing you compile-time safety and easy maintainability.
+
+---
+
+# See Also
+
+- [Overview → Product Overview](overview/introduction-core-concepts/product-overview) for core concepts
+- [Getting Started → Your First Code Generation](getting-started/onboarding-core/first-code-generation) for initial setup
+- [Guides → Association Operations](guides/core-usage-patterns/association-operations) for detailed association management
+- [Guides → Template-Based Queries](guides/core-usage-patterns/template-based-queries) for advanced query customization
+
+---
