@@ -1,0 +1,281 @@
+---
+title: "Using the Generated Code"
+description: "Demonstrates importing and leveraging the generated type-safe APIs and field helpers within your GORM project. Provides working code snippets and guidance for basic queries and updates using generated helpers."
+---
+
+# Using the Generated Code
+
+This guide demonstrates how to import and use the **generated type-safe query APIs** and **model-driven field helpers** created by GORM CLI within your GORM projects. You'll learn to integrate these generated components seamlessly into your Go code, perform basic queries and updates, and leverage strong typing for safer, clearer database operations.
+
+---
+
+## 1. Importing the Generated Code
+
+After running the GORM CLI generator with your model and query interface definitions, your generated files will live in the specified output directory (e.g., `./generated`).
+
+To start using the generated APIs and field helpers, import the generated package into your Go project:
+
+```go
+import (
+    "context"
+    "gorm.io/gorm"
+
+    // Adjust this import to match your generated code path
+    "your_project/generated"
+    "your_project/models"
+)
+```
+
+> **Tip:** Ensure your module paths and import paths align with your project layout when importing generated code.
+
+
+## 2. Initializing Generated Query APIs
+
+The generator creates generic functions that provide type-safe query interfaces for your models. To get a query instance:
+
+```go
+// Assume db is your *gorm.DB instance
+ctx := context.Background()
+
+// Create a query interface for User model
+userQuery := generated.Query[models.User](db)
+
+// Now you can use userQuery to run type-safe queries
+```
+
+This pattern works for any generated query interface you defined in your source interfaces.
+
+
+## 3. Using Generated Query Methods
+
+The generated interfaces provide methods corresponding to your declared SQL templated queries in the source interface, offering:
+
+- Methods returning a typed struct or collection
+- Methods returning an interface for further chaining or querying
+
+### Basic Query Example:
+
+```go
+// Get a single user by ID
+user, err := userQuery.GetByID(ctx, 123)
+if err != nil {
+    // handle error
+}
+fmt.Println("User:", user)
+```
+
+### Chaining Query with Filters Example:
+
+```go
+// Chain Where clauses using generated fields
+users, err := userQuery.FilterByNameAndAge("jinzhu", 25).Find(ctx)
+if err != nil {
+    // handle error
+}
+fmt.Println("Users:", users)
+```
+
+---
+
+## 4. Working with Generated Field Helpers
+
+Generated field helpers provide strongly typed predicates and update setters to safely create queries and update statements.
+
+### Accessing Field Helpers
+
+Each model gets a variable struct exposing fields as typed helpers:
+
+```go
+// Access the generated User fields
+userFields := generated.User
+
+// Example: generate a condition for filtering
+condition := userFields.Age.Gt(18)          // age > 18
+nameCond := userFields.Name.Like("%ginzhu%") // name LIKE '%ginzhu%'
+```
+
+### Using Field Helpers in Queries
+
+You can use the field helpers to build `Where` clauses or updates:
+
+```go
+// Find users older than 18
+users, err := gorm.G[models.User](db).
+    Where(userFields.Age.Gt(18)).
+    Find(ctx)
+
+// Update user name where ID matches
+err = gorm.G[models.User](db).
+    Where(userFields.ID.Eq(123)).
+    Set(userFields.Name.Set("NewName")).
+    Update(ctx)
+```
+
+### Example: Common Predicate Usage
+
+```go
+userFields.ID.Eq(1)                 // id = 1
+userFields.Name.Like("%jinzhu%")    // name LIKE '%jinzhu%'
+userFields.Age.Between(18, 65)      // age BETWEEN 18 AND 65
+userFields.Score.IsNull()           // score IS NULL
+```
+
+### Example: Updates and Expression Setters
+
+```go
+gorm.G[models.User](db).
+  Where(userFields.Name.Eq("alice")).
+  Set(
+    userFields.Name.Set("jinzhu"),
+    userFields.IsAdult.Set(false),
+    userFields.Score.Set(sql.NullInt64{}),
+    userFields.Age.Incr(1),
+    userFields.Age.SetExpr(gormclause.Expr{SQL: "GREATEST(?, ?)", Vars: []any{gormclause.Column{Name: "age"}, 18}}),
+  ).
+  Update(ctx)
+```
+
+
+## 5. Working With Associations
+
+Generated code includes field helpers for associations, such as `field.Struct` (for single related structs) and `field.Slice` (for collections). These helpers support operations like creating, updating, unlinking, or deleting related rows.
+
+### Create and Link Associated Records
+
+```go
+// Create a new user with one pet
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+### Batch Create Linked Records (Many-to-Many)
+
+```go
+// Create a user and link multiple languages
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("polyglot"),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Create(ctx)
+```
+
+### Update Associated Records
+
+```go
+// Update a pet's name where pet name is 'fido'
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+    Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+```
+
+### Unlink or Delete Associated Records
+
+```go
+// Unlink a user's pets
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete associated pets
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+```
+
+
+## 6. Putting It All Together: Running Your First Query
+
+Here is a minimal snippet showing the flow from generated interfaces to results:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "gorm.io/driver/sqlite"
+    "gorm.io/gorm"
+
+    "your_project/generated"
+    "your_project/models"
+)
+
+func main() {
+    // Open DB connection
+    db, err := gorm.Open(sqlite.Open("test.db"), &gorm.Config{})
+    if err != nil {
+        panic(err)
+    }
+
+    ctx := context.Background()
+
+    // Initialize query interface for User
+    userQ := generated.Query[models.User](db)
+
+    // Fetch a user by ID
+    user, err := userQ.GetByID(ctx, 123)
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Printf("User fetched: %+v\n", user)
+}
+```
+
+
+## 7. Troubleshooting Common Issues
+
+### Import Errors
+- **Symptom:** Compilation fails with errors about unknown package or path.
+- **Solution:** Ensure that the generated code directory is included in your Go module and that import paths align with your project structure.
+
+### Method Not Found
+- **Symptom:** Generated query methods appear missing.
+- **Solution:** Confirm you ran the generator on the correct directory and interfaces. Check for proper code generation success and no errors.
+
+### Field Helper Missing
+- **Symptom:** Fields or helpers are not found.
+- **Solution:** Check your models for exported fields and proper struct tags. Run code generation after any model changes.
+
+### Context Parameter Issues
+- **Symptom:** Methods require a `context.Context` parameter though your interface lacks it.
+- **Solution:** This is expected behavior; the generator automatically injects `context.Context` if not declared.
+
+
+## 8. Next Steps
+
+- Explore advanced association operations with generated field helpers in the [Advanced Associations](https://your-docs/guides/advanced-usage/advanced-associations) guide.
+- Dive deeper into writing SQL templates for your query interfaces in [Template DSL Guide](https://your-docs/guides/advanced-usage/template-dsl-guide).
+- Learn about customizing code generation using `genconfig.Config` in [Customizing Generation](https://your-docs/guides/advanced-usage/customizing-generation).
+
+
+---
+
+## Additional Resources
+
+- [Quick Feature Overview](https://your-docs/overview/feature-glance/quick-feature-overview) — Understand key features of GORM CLI.
+- [First Code Generation Setup](https://your-docs/getting-started/first-code-gen/project-setup) — How to organize your project before generation.
+- [Running the Generator](https://your-docs/getting-started/first-code-gen/running-generator) — Commands and examples to generate code.
+
+
+---
+
+By using the generated query interfaces and field helpers, you gain safer, clearer, and faster development for your GORM-based applications.
+
+
+---
+
+If you encounter issues beyond this guide, visit our [Troubleshooting Common Issues](https://your-docs/getting-started/troubleshooting-validation/troubleshooting) page or seek assistance in community channels.
+
+---
