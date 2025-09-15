@@ -1,0 +1,286 @@
+---
+title: "Using JSON Fields and Custom Helper Types"
+description: "See step-by-step how to configure and use custom helper types for complex fields such as JSON columns, including multi-dialect SQL generation. Addresses mapping, tagging, and practical query-building patterns for modern projects."
+---
+
+# Using JSON Fields and Custom Helper Types
+
+## Overview
+This guide walks you through configuring and using custom helper types for complex fields in your GORM CLI generated code, focusing primarily on JSON columns. It covers how to map JSON fields in your models, define custom helper types with database-specific SQL generation, and apply these helpers in generated queries. Whether targeting MySQL, SQLite, or PostgreSQL, you will gain practical patterns for advanced query construction involving JSON.
+
+---
+
+## What You'll Achieve
+By following this guide, you'll be able to:
+
+- Configure your project to recognize JSON fields and assign a custom field helper.
+- Define a custom `JSON` helper type with fluent API methods for JSON containment and comparison.
+- Generate type-safe code that adapts JSON queries automatically to different SQL dialects.
+- Write practical queries using JSON helpers in your code, seamlessly integrating with GORM CLI's fluent API.
+
+---
+
+## Prerequisites
+
+- Your Go project uses GORM CLI for code generation.
+- You have defined Go models with JSON columns.
+- Basic familiarity with GORM CLI code generation and field helper concepts.
+- Installed GORM CLI and configured your environment for generating code.
+
+---
+
+## Time Estimate
+15–30 minutes, depending on model complexity and your familiarity with GORM CLI.
+
+## Difficulty Level
+Intermediate
+
+---
+
+## Step 1: Declare Configuration for JSON Field Mapping
+
+You need to configure the generator to recognize JSON-tagged fields and map them to a custom helper type.
+
+1. Create or update a package-level `genconfig.Config` variable in the package containing your models.
+2. In the `FieldNameMap`, map the tag name (e.g., `json`) to the custom JSON helper type.
+3. Optionally, set the output path or other configurations as needed.
+
+Example:
+
+```go
+package examples
+
+import (
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "examples/output",
+    FieldNameMap: map[string]any{
+        "json": JSON{}, // Map fields tagged with `gen:"json"` to the JSON helper
+    },
+}
+```
+
+---
+
+## Step 2: Tag Your Model Fields to Use the JSON Helper
+
+In your model struct, annotate the JSON column field with the custom tag that the generator recognizes (here: `gen:"json"`).
+
+Example:
+
+```go
+package models
+
+type User struct {
+    // ... other fields ...
+    Profile string `gen:"json"` // This field uses the JSON helper
+}
+```
+
+This tells GORM CLI to generate field helpers for `Profile` using your custom `JSON` type.
+
+---
+
+## Step 3: Define the Custom JSON Helper Type
+
+The JSON helper needs to:
+
+- Embed the `clause.Column` to track the column name.
+- Provide a `WithColumn(name string) JSON` method to set the SQL column.
+- Implement methods that build database-specific SQL expressions for JSON operations.
+
+Here’s a complete example implementing two common JSON operations: equality comparison and containment.
+
+```go
+package examples
+
+import (
+    "encoding/json"
+    "gorm.io/gorm"
+    "gorm.io/gorm/clause"
+)
+
+// JSON is a field helper for JSON columns with dialect-specific SQL generation.
+type JSON struct {
+    column clause.Column
+}
+
+// WithColumn sets the column name for this JSON helper.
+func (j JSON) WithColumn(name string) JSON {
+    c := j.column
+    c.Name = name
+    return JSON{column: c}
+}
+
+// Equal builds a JSON path equality expression suitable for different dialects.
+// path example: "$.vip"
+func (j JSON) Equal(path string, value any) clause.Expression {
+    return jsonEqualExpr{col: j.column, path: path, val: value}
+}
+
+type jsonEqualExpr struct {
+    col  clause.Column
+    path string
+    val  any
+}
+
+func (e jsonEqualExpr) Build(builder clause.Builder) {
+    if stmt, ok := builder.(*gorm.Statement); ok {
+        switch stmt.Dialector.Name() {
+        case "mysql":
+            v, _ := json.Marshal(e.val)
+            // MySQL JSON_EXTRACT(column, path) = CAST(value AS JSON)
+            clause.Expr{SQL: "JSON_EXTRACT(?, ?) = CAST(? AS JSON)", Vars: []any{e.col, e.path, string(v)}}.Build(builder)
+        case "sqlite":
+            // SQLite json_valid() and json_extract()
+            clause.Expr{SQL: "json_valid(?) AND json_extract(?, ?) = ?", Vars: []any{e.col, e.col, e.path, e.val}}.Build(builder)
+        default:
+            // PostgreSQL jsonb_extract_path_text(column, path) = value
+            // Skip leading $. in path
+            path := e.path
+            if len(path) > 2 && path[:2] == "$." {
+                path = path[2:]
+            }
+            clause.Expr{SQL: "jsonb_extract_path_text(?, ?) = ?", Vars: []any{e.col, path, e.val}}.Build(builder)
+        }
+    }
+}
+
+// Contains creates a JSON containment predicate (currently MySQL-specific example).
+func (j JSON) Contains(value any) clause.Expression {
+    return clause.Expr{SQL: "JSON_CONTAINS(?, ?)", Vars: []any{j.column, value}}
+}
+```
+
+---
+
+## Step 4: Generate the Code
+
+Run the GORM CLI generator in your project directory where your models and configs live.
+
+```bash
+gorm gen -i ./examples -o ./examples/output
+```
+
+The generator will produce strongly typed field helpers for your models, using your custom JSON helper for the tagged fields.
+
+---
+
+## Step 5: Use JSON Helper Methods in Queries
+
+With generated code, you can now write expressive, type-safe JSON queries that adapt to your database dialect automatically.
+
+Example:
+
+```go
+import (
+    "context"
+    "gorm.io/gorm"
+    "examples/output/models"
+    "examples/output/generated"
+)
+
+func FindVipUsers(ctx context.Context, db *gorm.DB) ([]models.User, error) {
+    // Query users where Profile JSON contains {"vip": true} or equals
+    return generated.G[models.User](db).
+        Where(generated.User.Profile.Equal("$.vip", true)).
+        Find(ctx)
+}
+```
+
+This will produce SQL queries that handle JSON extraction and comparison correctly for each database.
+
+---
+
+## Best Practices and Tips
+
+- **Use JSON Path Correctly**: Pass valid JSON path expressions (e.g., `"$.vip"`), respecting the syntax your database dialect expects.
+- **Custom Helpers Can Extend**: Add more JSON operations as needed (e.g., `HasKey`, `Contains`, `JsonArrayLength`) by implementing additional methods on the JSON helper.
+- **Test Queries on Target DBs**: Since SQL varies, validate generated queries on all dialects your application supports.
+- **Keep Tags Consistent**: Use consistent struct tags (`gen:"json"`) to avoid mismatches or generation errors.
+
+---
+
+## Troubleshooting
+
+<AccordionGroup title="Common JSON Field Issues">
+<Accordion title="Generated Field Not Using JSON Helper">
+Verify that:
+- Your `genconfig.Config` is properly declared and included in the package.
+- The struct field has the correct `gen:"json"` tag.
+- You ran the generator after making changes.
+</Accordion>
+<Accordion title="SQL Errors in JSON Queries">
+Check:
+- Validity of JSON path syntax.
+- Compatibility of your custom JSON helper’s SQL output with your dialect.
+- Proper nil and zero-value handling in query parameters.
+</Accordion>
+<Accordion title="Custom Helper Methods Not Available">
+Ensure that:
+- Your custom helper is fully defined with required methods.
+- The package imports your custom helper type.
+- Regenerate code after code updates.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Summary
+
+The JSON field custom helper pattern empowers sophisticated JSON column queries adaptable across SQL dialects. By configuring field mappings, defining versatile helpers, and generating tailored code, your GORM CLI project gains fluent, safe, and expressive JSON support.
+
+---
+
+## Related Documentation
+
+- [Basic Generator Configuration](/guides/advanced-generation/generation-configuration): Learn how to customize generator configs including field mapping.
+- [Advanced Field and Association Helpers](/guides/advanced-generation/advanced-model-helpers): For deeper field helper techniques.
+- [Using the Generated APIs](/guides/getting-started/using-generated-apis): How to work with generated fluent query APIs.
+
+---
+
+## Reference
+- Source code for JSON helper example: [examples/json_field.go](https://github.com/go-gorm/cli/blob/main/examples/json_field.go)
+- Model example with JSON tag: [examples/models/user.go](https://github.com/go-gorm/cli/blob/main/examples/models/user.go)
+- Configuration example: [examples/query.go](https://github.com/go-gorm/cli/blob/main/examples/query.go)
+
+---
+
+## Mermaid Diagram: JSON Field Helper Workflow
+
+```mermaid
+flowchart TD
+
+  subgraph Configuration
+    ConfigFile["genconfig.Config with FieldNameMap"]
+    ModelStruct["Model Struct with `gen:\"json\"` tag"]
+  end
+
+  subgraph Generation
+    GORMCLI["GORM CLI Generator"]
+    GeneratedHelpers["Generated Field Helpers (including JSON)"]
+  end
+
+  subgraph Usage
+    UserCode["Your Go Application Code"]
+    DB["Database (MySQL / SQLite / Postgres)"]
+  end
+
+  ConfigFile -->|Defines JSON mapping| GORMCLI
+  ModelStruct -->|Tagged for JSON| GORMCLI
+  GORMCLI -->|Generates| GeneratedHelpers
+  UserCode -->|Calls JSON helper methods| GeneratedHelpers
+  GeneratedHelpers -->|Builds SQL with dialect logic| DB
+
+  %% Styling
+  classDef config fill:#f3f7ff,stroke:#4a90e2,stroke-width:1px
+  classDef gen fill:#e6ffed,stroke:#28a745,stroke-width:1px
+  classDef usage fill:#fffbe6,stroke:#d4a017,stroke-width:1px
+
+  class Configuration config
+  class Generation gen
+  class Usage usage
+```
