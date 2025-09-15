@@ -1,0 +1,295 @@
+---
+title: "Generating Type-Safe Query APIs"
+description: "Step-by-step instructions to write query interfaces with SQL templates and generate robust, type-safe query methods using GORM CLI. Illustrates the use of SQL templating and parameter binding, and demonstrates practical calls to the generated APIs."
+---
+
+# Generating Type-Safe Query APIs
+
+## Workflow Overview
+
+### What This Guide Helps You Accomplish
+This guide walks you through writing Go query interfaces with embedded SQL templates and using GORM CLI to generate robust, type-safe query methods. By following the steps here, you learn to harness the power of SQL templating and parameter binding in your interfaces, leading to fluent, compile-time safe query APIs tailored to your models.
+
+### Prerequisites
+
+- You have Go 1.18 or later installed with module support.
+- GORM CLI is installed (`go install gorm.io/cli/gorm@latest`).
+- Your Go models and query interfaces are defined in your project.
+- Basic familiarity with GORM and Go interfaces.
+
+### Expected Outcome
+
+By completing this guide, you'll be able to:
+- Write query interfaces with declarative SQL and templating directives in method comments.
+- Generate concrete, type-safe query implementations with GORM CLI.
+- Use the generated APIs effectively in your Go projects.
+
+### Time Estimate
+
+Approximately 20-30 minutes depending on familiarity with Go and SQL templating.
+
+### Difficulty Level
+
+Intermediate
+
+---
+
+## Step-by-Step Instructions
+
+### 1. Define Your Query Interfaces with SQL Templates
+
+Your query interface methods contain SQL statements directly in the method comments, using the GORM CLI templating DSL. This enables the generator to produce type-safe query methods backed by raw SQL.
+
+**How to do it:**
+
+- Create an interface in Go, parameterized by a generic type `T` representing your model.
+- Add method comments containing SQL with placeholders for parameters.
+- Use directives like `@@table`, `@param`, `{{where}}`, and conditional blocks (`{{if}}`, `{{end}}`) to write dynamic SQL templates.
+
+**Example:**
+
+```go
+package examples
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id AND name = "\@name"
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // SELECT * FROM users
+  //   {{if user.ID > 0}}
+  //       WHERE id=@user.ID
+  //   {{else if user.Name != ""}}
+  //       WHERE name=@user.Name
+  //   {{end}}
+  QueryWith(user models.User) (T, error)
+
+  // UPDATE @@table
+  //  {{set}}
+  //    {{if user.Name != ""}} name=@user.Name, {{end}}
+  //    {{if user.Age > 0}} age=@user.Age, {{end}}
+  //    {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+  //  {{end}}
+  // WHERE id=@id
+  UpdateInfo(user models.User, id int) error
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{for _, user := range users}}
+  //     {{if user.Name != "" && user.Age > 0}}
+  //       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+  //     {{end}}
+  //   {{end}}
+  // {{end}}
+  Filter(users []models.User) ([]T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+
+  // SELECT * FROM @@table
+  //  {{where}}
+  //    {{if !start.IsZero()}}
+  //      created_at > @start
+  //    {{end}}
+  //    {{if !end.IsZero()}}
+  //      AND created_at < @end
+  //    {{end}}
+  //  {{end}}
+  FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+This example illustrates different SQL template capabilities:
+
+- Static and dynamic WHERE clauses
+- Parameter binding with `@param` syntax
+- Conditional SQL generation with `{{if}}` and `{{for}}`
+- SQL `@` escaping demonstration 
+
+---
+
+### 2. Add Your Models and Organize Code
+
+Make sure your model types referenced in the query interfaces are defined and accessible. Models usually include fields that map to database columns.
+
+**Tips:**
+- Place query interfaces and models in the same package or directory for convenient generation.
+- Use `genconfig.Config` to customize generation options like output directories or field mappings (optional).
+
+---
+
+### 3. Run the GORM CLI Generator
+
+Use the `gorm gen` command to process your interfaces and generate the query code.
+
+**Basic command syntax:**
+
+```bash
+gorm gen -i ./path/to/your/interfaces -o ./path/to/generated-output
+```
+
+**Key points:**
+
+- `-i` specifies the input path for your Go interface files.
+- `-o` designates where the generated code will be saved.
+- The generated code includes concrete implementations with SQL methods reflecting your templates.
+
+**Example:**
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+After running, your console will indicate which files were generated.
+
+
+---
+
+### 4. Inspect and Use the Generated APIs
+
+Look at the generated Go files inside your output path. You will find:
+
+- Concrete types implementing your query interfaces.
+- Methods containing SQL execution logic with parameter binding.
+
+You can now call these methods from your application code with full type safety.
+
+**Example usage:**
+
+```go
+// Select a user by id
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+
+// Query using dynamic conditions
+users, err := generated.Query[User](db).FilterByNameAndAge("jinzhu", 25).Find(ctx)
+
+// Update a user
+err = generated.Query[User](db).UpdateInfo(ctx, User{Name: "jinzhu", Age: 20}, 1)
+```
+
+---
+
+### 5. Verify and Troubleshoot
+
+Make sure your generated code compiles and behaves as intended.
+
+**Checklist:**
+- Generated methods accept expected parameters.
+- Calls return errors as part of the method signature.
+- SQL templates correctly translate to underlying raw SQL with proper parameter binding.
+
+If you encounter issues, consult troubleshooting guides on:
+- Ensuring SQL template syntax correctness.
+- Valid Go interface method signatures.
+- Generator configuration and file path correctness.
+
+---
+
+## Practical Tips and Best Practices
+
+- Always use `@@table` to refer to your model's underlying table for portability.
+- Use `@param` syntax strictly to bind method parameters safely.
+- Leverage conditional directives (`{{if}}`, `{{where}}`) to write flexible, dynamic queries.
+- Provide context parameters explicitly or let the generator inject them.
+- Keep interface methods concise and focused on query intent.
+- Use `genconfig.Config` to refine generation behavior to fit your project structure.
+
+---
+
+## Examples
+
+### Example Query Interface Method
+
+```go
+// SELECT * FROM @@table WHERE id=@id AND name = "\@name"
+GetByID(id int) (T, error)
+```
+
+Generates a method that queries by `id` and matches against literal string `@name` (escaped).
+
+### Example Generated Method Snippet
+
+```go
+func (e _QueryUserImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+  var sb strings.Builder
+  params := make([]any, 0, 2)
+  sb.WriteString("SELECT * FROM ? WHERE id=? AND name = \"@name\"")
+  params = append(params, clause.Table{Name: clause.CurrentTable}, id)
+
+  var result T
+  err := e.Raw(sb.String(), params...).Scan(ctx, &result)
+  return result, err
+}
+```
+
+---
+
+## Troubleshooting & Tips
+
+### Common Issues
+
+- **Missing Context Parameter:** If your method signatures lack a `context.Context`, GORM CLI injects it automatically. Still, you can declare it explicitly if preferred.
+
+- **Invalid SQL Templating:** Ensure your SQL comments are valid Go comments and the templating directives are syntactically correct.
+
+- **Incorrect Return Types:** Methods returning data must return the data and an error (or just error for void operations). Otherwise, generation fails.
+
+- **File Paths and Permissions:** Confirm the input path exists and output directory is writable.
+
+### Best Practices
+
+- Regularly review generated code to understand its structure.
+- Use small, focused interfaces for clarity and maintainability.
+- Combine templates with GORM's filter helpers when needed for complex querying.
+
+---
+
+## Next Steps & Related Content
+
+- Proceed to [Using Model-Driven Field Helpers](/guides/core-workflows/field-helper-generation) to learn about generating and using type-safe field helpers.
+- Explore [Writing Powerful Queries with the Template SQL DSL](/guides/advanced-use-cases/template-sql-dsl) for advanced templating usages.
+- Review [Running the Code Generator](/getting-started/first-code-generation/running-gorm-cli-gen) for in-depth instructions on running and configuring the generator.
+- Consult [Troubleshooting Common Setup Issues](/getting-started/first-code-generation/troubleshooting-common-issues) for resolving common problems.
+
+---
+
+## Summary
+
+This documentation page provides a clear, practical workflow for defining query interfaces with embedded SQL templates and generating type-safe query APIs using GORM CLI. It emphasizes writing interface method comments with SQL, using templating directives for dynamic queries, running the generator tool, and effectively using the generated APIs with practical examples. Troubleshooting tips and best practices ensure developer success.
+
+---
+
+# Additional Resources
+
+- [Official GORM CLI README](https://github.com/go-gorm/cli)
+- [Defining Models and Query Interfaces](../getting-started/first-code-generation/defining-models-and-interfaces)
+- [Running the Code Generator](../getting-started/first-code-generation/running-gorm-cli-gen) 
+- [Template SQL DSL Guide](../guides/advanced-use-cases/template-sql-dsl)
+
+---
+
+# Diagram: Query API Generation Flow
+
+```mermaid
+flowchart TD
+  A[Write Go Query Interface with SQL Templates] --> B[Run GORM CLI Generator]
+  B --> C[Generate Concrete Query API Code]
+  C --> D[Use Generated APIs in Application]
+  D --> E[Execute SQL via Type-Safe Methods]
+
+  subgraph Generation Details
+    B --> B1[Parse SQL Templates & Interface Methods]
+    B --> B2[Apply Configuration & Filters]
+    B --> B3[Render Go Source Files with Implementations]
+  end
+
+  subgraph Developer Usage
+    D --> D1[Invoke Methods like GetByID(ctx, id)]
+    D --> D2[Receive Typed Results and Errors]
+  end
+
+  style B fill:#f9f,stroke:#333,stroke-width:2px
+  style C fill:#bbf,stroke:#222,stroke-width:1px
+```

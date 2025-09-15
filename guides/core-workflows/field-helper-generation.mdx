@@ -1,0 +1,385 @@
+---
+title: "Using Model-Driven Field Helpers"
+description: "How to leverage generated field helpers for predicates, updates, ordering, and associations. Includes common patterns for constructing readable, maintainable queries and updates, with examples drawn from real-world use cases."
+---
+
+# Using Model-Driven Field Helpers
+
+This guide explains how to effectively use the **generated model-driven field helpers** in GORM CLI for constructing predicates, updates, orderings, and association operations. These strongly typed helpers enhance query readability, maintainability, and safety by providing a fluent API that integrates seamlessly into GORM workflows.
+
+---
+
+## 1. Introduction
+
+GORM CLI generates a rich set of **field helpers** from your Go model structs, encapsulating each column and association into typed predicates and update setters. This enables you to:
+
+- Build complex, type-safe `WHERE` conditions and ordering
+- Perform expressive, concise `SET` updates including incrementing or expressions
+- Manage associations with dedicated, compile-time safe methods (create, update, unlink, delete)
+
+This page focuses purely on *using* these generated helpers rather than configuring or generating them, guiding you through common patterns and use cases directly relevant to your daily development.
+
+
+## 2. Prerequisites
+
+- You have run the GORM CLI code generator (`gorm gen`) on your models, producing the generated field helpers.
+- Your generated code is imported (typically aliased as `generated` or similar).
+- Basic familiarity with GORM querying and context usage.
+
+
+## 3. Basic Usage Patterns
+
+### 3.1 Referencing Generated Helpers
+
+Each model struct generates a global `var` with its fields. For example:
+
+```go
+import (
+  "gorm.io/gorm"
+  generated "gorm.io/cli/gorm/examples/output/models" // adjust import path
+)
+
+// Access User model helpers:
+generated.User.Name    // field.String predicate for "name" column
+generated.User.Age     // field.Number[int] for "age" column
+generated.User.Pets    // field.Slice[Pet] for association "Pets"
+```
+
+
+### 3.2 Building Predicates for Queries
+
+Use the fields to build `Where` clauses with expressions like:
+
+```go
+// Find users older than 18:
+db.Where(generated.User.Age.Gt(18)).Find(&users)
+
+// Find users named Henry:
+db.Where(generated.User.Name.Eq("Henry")).Find(&users)
+
+// Combine predicates with multiple conditions:
+db.Where(
+  generated.User.Age.Gte(18),
+  generated.User.Role.Eq("active"),
+).Find(&users)
+```
+
+
+### 3.3 Special Predicate Methods
+
+Predicates support useful methods:
+
+- `Eq(value)` — equals
+- `Neq(value)` — not equals
+- `Gt(value)`, `Gte(value)` — greater than (or equal)
+- `Lt(value)`, `Lte(value)` — less than (or equal)
+- `Like(pattern)` — SQL `LIKE`
+- `Between(low, high)` — SQL BETWEEN
+- `In(values...)` — SQL IN
+- `IsNull()`, `IsNotNull()` — NULL checks
+
+For example:
+
+```go
+// Find users with NULL Score:
+db.Where(generated.User.Score.IsNull()).Find(&users)
+
+// Find users with name like '%jinzhu%':
+db.Where(generated.User.Name.Like("%jinzhu%")).Find(&users)
+
+// Find users with age between 18 and 65:
+db.Where(generated.User.Age.Between(18, 65)).Find(&users)
+```
+
+
+### 3.4 Using Predicates with Context
+
+The generated traits return expressions compatible with GORM and can be used in any `Where` or `Order` call within a context-aware flow:
+
+```go
+ctx := context.Background()
+users := []models.User{}
+
+err := gorm.G[models.User](db).
+  Where(generated.User.Role.Eq("active"), generated.User.IsAdult.Eq(true)).
+  Find(ctx, &users)
+
+if err != nil {
+  // handle error
+}
+```
+
+
+## 4. Using Field Helpers for Updates
+
+Beyond querying, field helpers enable expressive update operations by bundling assignments for `Set`.
+
+### 4.1 Basic Setters
+
+Each field helper provides a `Set(value)` method to build an assignment:
+
+```go
+// Set user role to "active"
+assign := generated.User.Role.Set("active")
+
+// Set age to 30
+ageAssign := generated.User.Age.Set(30)
+```
+
+Apply these in chained `Set(...)` calls:
+
+```go
+gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice")).
+  Set(
+    generated.User.Role.Set("active"),
+    generated.User.IsAdult.Set(true),
+  ).
+  Update(ctx)
+```
+
+
+### 4.2 Increment and Expressions
+
+Use helpers for increment or raw SQL expressions:
+
+```go
+// Increment age by 1
+gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(generated.User.Age.Incr(1)).
+  Update(ctx)
+
+// Use custom SQL expression (e.g. GREATEST(age, 18))
+gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(generated.User.Age.SetExpr(clause.Expr{
+    SQL:  "GREATEST(?, ?)",
+    Vars: []any{clause.Column{Name: "age"}, 18},
+  })).
+  Update(ctx)
+```
+
+
+### 4.3 Combine Zero Values and Set
+
+Explicitly setting zero values is straightforward:
+
+```go
+// Set role to empty string, isAdult to false explicitly
+gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("cathy")).
+  Set(
+    generated.User.Role.Set(""),
+    generated.User.IsAdult.Set(false),
+  ).
+  Update(ctx)
+```
+
+
+## 5. Working With Associations
+
+The generated code creates dedicated **association helpers** for related entities (e.g., `field.Struct[T]` or `field.Slice[T]`) corresponding to `has one`, `has many`, `belongs to`, or `many2many` relationships.
+
+### 5.1 Association Operations
+
+Association fields provide methods:
+
+- `Create(setters...)`: create and link a related record
+- `CreateInBatch([]T)`: create and link multiple related records
+- `Update(setters...)`: update associated records
+- `Unlink()`: remove association links without deleting records
+- `Delete()`: delete related records (for `many2many`, deletes join rows only)
+- `Where(predicates...)`: specify filter on associated records prior to Update/Unlink/Delete operations
+
+### 5.2 Examples
+
+```go
+// Create a new user with one pet
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Link multiple languages (many2many) on creation
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("polyglot"),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Create(ctx)
+
+// Update a user's pet with filter
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+      Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+// Unlink association (removes link but does not delete)
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete associated pets
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+
+// Conditionally unlink/delete association
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Unlink()).
+  Update(ctx)
+
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete()).
+  Update(ctx)
+
+// Batch link existing languages
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}})).
+  Update(ctx)
+```
+
+### 5.3 Semantics by Association Type
+
+- **belongs to:**
+  - `Unlink()` sets parent foreign key to NULL
+  - `Delete()` removes associated row
+- **has one / has many:**
+  - `Unlink()` sets child foreign key to NULL
+  - `Delete()` deletes child rows
+- **many2many:**
+  - `Unlink()`/`Delete()` remove join rows only, no side effects on linked entities
+
+
+## 6. Real-World Example
+
+Putting it all together:
+
+```go
+// Find active users older than 18
+var users []models.User
+err := gorm.G[models.User](db).
+  Where(
+    generated.User.Role.Eq("active"),
+    generated.User.Age.Gt(18),
+  ).
+  Find(ctx, &users)
+
+// Increment 'bob' age by 1 and deactivate
+rows, err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(
+    generated.User.Age.Incr(1),
+    generated.User.Role.Set("inactive"),
+  ).
+  Update(ctx)
+
+// Create new user with pets and languages
+err = gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("newuser"),
+    generated.User.Age.Set(25),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fluffy")),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "ES"}, {Code: "DE"}}),
+  ).
+  Create(ctx)
+```
+
+
+## 7. Best Practices & Tips
+
+- **Use field helpers exclusively to avoid stringly-typed column names.** This prevents typos and enables compile-time validation.
+- **Combine multiple predicates with commas in `Where` to express AND logic clearly.**
+- **Use `Set` assignments when updating multiple fields, including mixed zero-values and expressions.**
+- **Use association helpers to avoid manual foreign key handling** and ensure correct linkage semantics.
+- **Apply conditional filtering on associations via `.Where(...)` before `Update`, `Unlink`, or `Delete`.**
+
+
+## 8. Troubleshooting
+
+<AccordionGroup title="Common Issues with Field Helpers Usage">
+<Accordion title="Cannot find generated model or fields">
+Make sure you have run `gorm gen` and imported the generated package correctly. The generated vars are package-level public variables named after your model, e.g., `generated.User`.
+</Accordion>
+<Accordion title="Type errors when using predicates or setters">
+Verify your model fields' types and the generated helper types match. Custom Go types may require explicit field mappings in `genconfig.Config`.
+</Accordion>
+<Accordion title="Association operations fail or do not behave as expected">
+Confirm the association is correctly defined in the model and code has been regenerated. Review association type semantics around unlinking and deleting to avoid surprises.
+</Accordion>
+<Accordion title="Updating zero values doesn't persist as expected">
+Always use `Set(field.Set(zero_value))` explicitly; omitting fields may lead to skipped updates to zero values.
+</Accordion>
+</AccordionGroup>
+
+
+## 9. Next Steps & Related Documentation
+
+- [Generating Type-Safe Query APIs](/guides/core-workflows/generating-query-apis): Learn to write interfaces for SQL template queries.
+- [Defining Models and Query Interfaces](/getting-started/first-code-generation/defining-models-and-interfaces): Understand model and interface preparation for generation.
+- [Working with Associations: Patterns & Best Practices](/guides/advanced-use-cases/associations-best-practices): Deep dive on associations design and usage.
+- [Template SQL DSL](/guides/advanced-use-cases/template-sql-dsl): Master the query method templating language.
+- [Basic Configuration](/getting-started/setup-and-installation/basic-configuration): Customize generation behavior including field mappings.
+
+
+---
+
+Harnessing model-driven field helpers unlocks the full power of GORM CLI’s fluent, type-safe data access layer. Begin by practicing query predicates and simple updates, then incorporate complex association operations for scalable, maintainable Go code.
+
+
+## Appendix: Code Examples
+
+### Predicate Example
+```go
+users, err := gorm.G[models.User](db).
+  Where(
+    generated.User.Age.Gt(18),
+    generated.User.Role.Eq("active"),
+  ).
+  Find(ctx)
+```
+
+### Update with Set Example
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice")).
+  Set(
+    generated.User.Role.Set("active"),
+    generated.User.Age.Incr(1),
+  ).
+  Update(ctx)
+```
+
+### Association Create Example
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("newuser"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("bubbles")),
+  ).
+  Create(ctx)
+```
+
+### Association Conditional Update
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("bubbles")).Update(generated.Pet.Name.Set("bub")),
+  ).
+  Update(ctx)
+```
+
+
+---
