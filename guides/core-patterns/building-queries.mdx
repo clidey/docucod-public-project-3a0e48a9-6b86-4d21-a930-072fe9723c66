@@ -1,0 +1,302 @@
+---
+title: "Building Queries with Generated APIs"
+description: "Guides users through constructing readable, robust queries using generated methods, SQL templates, and predicate combinators. Showcases the translation from Go interface definitions to real-world query usage with a focus on safety and clarity."
+---
+
+# Building Queries with Generated APIs
+
+This guide walks you through constructing readable, robust database queries using the GORM CLI-generated query APIs. Leveraging interface-driven SQL templates, predicate combinators, and method generation, you will create type-safe, maintainable queries that map closely to your application logic while ensuring safety and clarity.
+
+---
+
+## 1. Workflow Overview
+
+- **Task Description**: Learn how to use the generated query interfaces and methods produced by GORM CLI to build expressive and safe database queries.
+- **Prerequisites**:
+  - Your project has Go interfaces with SQL templates defined.
+  - You have run the GORM CLI code generator producing concrete query implementations.
+  - An accessible `*gorm.DB` connection within your Go application.
+- **Expected Outcome**: You will gain fluency in calling generated query methods and combining predicates to build advanced queries.
+- **Time Estimate**: 15-30 minutes to follow and experiment.
+- **Difficulty Level**: Intermediate (basic Go and GORM usage assumed).
+
+---
+
+## 2. Understanding Generated Query APIs
+
+GORM CLI converts your annotated Go interfaces into concrete, generic query implementations. Each method corresponds to a SQL template with parameter placeholders and conditional logic. These methods expose an easy-to-use, type-safe API.
+
+### Typical Generated Interface Example
+
+Given this interface:
+
+```go
+// SELECT * FROM @@table WHERE id=@id AND name = "@name"
+GetByID(id int) (T, error)
+```
+
+GORM CLI generates:
+
+```go
+type _QueryInterface[T any] interface {
+    gorm.Interface[T]
+    GetByID(ctx context.Context, id int) (T, error)
+    // ... other methods
+}
+
+func (e _QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+    var sb strings.Builder
+    params := make([]any, 0, 2)
+    sb.WriteString("SELECT * FROM ? WHERE id=? AND name = \"@name\"")
+    params = append(params, clause.Table{Name: clause.CurrentTable}, id)
+
+    var result T
+    err := e.Raw(sb.String(), params...).Scan(ctx, &result)
+    return result, err
+}
+```
+
+### Key Takeaway
+- Methods inject context automatically if missing.
+- SQL templates map parameters with safety.
+- Generated methods return type-safe query results.
+
+---
+
+## 3. Step-by-Step Instructions: Using Generated Query Methods
+
+<Steps>
+<Step title="Instantiate the Query Interface">
+Import and create the query instance with your `*gorm.DB`.
+
+```go
+query := generated.Query[models.User](db)
+```
+
+Outcome: A fully-typed `Query` instance ready for database access.
+</Step>
+
+<Step title="Execute Basic Query Methods">
+Call simple accessor methods that correspond to simple queries.
+
+Example:
+```go
+user, err := query.GetByID(ctx, 123)
+if err != nil {
+    // handle error
+}
+fmt.Println(user.Name)
+```
+Outcome: Retrieves a user by ID safely.
+</Step>
+
+<Step title="Use Dynamic Columns in Queries">
+Some methods accept dynamic column names for flexible filters.
+
+Example:
+```go
+user, err := query.FilterWithColumn(ctx, "role", "special")
+```
+Outcome: Queries users with role 'special' dynamically.
+</Step>
+
+<Step title="Build Conditional Query Logic">
+Methods reflecting conditional SQL logic allow rich query criteria.
+
+Example:
+```go
+result, err := query.QueryWith(ctx, models.User{Name: "dan"})
+```
+The method internally generates SQL conditions based on which fields are non-zero.
+
+Outcome: Returns users matching complex conditional criteria.
+</Step>
+
+<Step title="Apply Batch Filters via Slices">
+Use methods accepting slices to create complex OR conditions.
+
+Example:
+```go
+filters := []models.User{
+    {Name: "alice", Age: 20, Role: "active"},
+    {Name: "dan", Age: 40, Role: "pending"},
+}
+results, err := query.Filter(ctx, filters)
+```
+Outcome: Matches any users fitting one of the filter criteria efficiently.
+</Step>
+
+<Step title="Use Predicate Combinators for Reusable Conditions">
+Chain and compose predicates (condition methods) for fluent queries.
+
+Example:
+```go
+query = query.FilterByNameAndAge(ctx, "alice", 20)
+users, err := query.Find(ctx)
+```
+Outcome: Applies AND conditions for name and age dynamically.
+</Step>
+
+<Step title="Use Time-Based Filters with Safety">
+Pass Go `time.Time` values for filtering based on time ranges.
+
+Example:
+```go
+start := time.Now().Add(-24 * time.Hour)
+end := time.Now()
+results, err := query.FilterWithTime(ctx, start, end)
+```
+Outcome: Returns users created within the specified time window.
+</Step>
+
+<Step title="Execute Updates via Generated Methods">
+Methods can also perform dynamic updates safely.
+
+Example:
+```go
+err := query.UpdateInfo(ctx, models.User{Name: "john", Age: 30}, 1)
+```
+The method dynamically sets only non-zero fields and computes derived columns.
+
+Outcome: Updates user with ID 1 with the given info.
+</Step>
+</Steps>
+
+---
+
+## 4. Practical Examples
+
+Here is a direct example simulating usage based on generated code:
+
+```go
+func exampleQueryUsage(db *gorm.DB, ctx context.Context) error {
+    query := generated.Query[models.User](db)
+
+    // Get by ID
+    user, err := query.GetByID(ctx, 10)
+    if err != nil {
+        return err
+    }
+
+    // Filter by dynamic column (role)
+    specialUser, err := query.FilterWithColumn(ctx, "role", "special")
+    if err != nil {
+        return err
+    }
+
+    // Conditional querying
+    userQuery, err := query.QueryWith(ctx, models.User{Name: "dan"})
+    if err != nil {
+        return err
+    }
+
+    // Batch filtering
+    filters := []models.User{{Name: "alice", Age: 20, Role: "active"}}
+    filteredUsers, err := query.Filter(ctx, filters)
+    if err != nil {
+        return err
+    }
+
+    // Update info
+    err = query.UpdateInfo(ctx, models.User{Name: "newname", Age: 25}, int(user.ID))
+    if err != nil {
+        return err
+    }
+
+    fmt.Println(user, specialUser, userQuery, filteredUsers)
+    return nil
+}
+```
+
+---
+
+## 5. Tips and Best Practices
+
+- **Always handle errors**: All generated query calls return errors for robust error management.
+- **Leverage context**: Inject `context.Context` to enable request cancellation and tracing.
+- **Use generated field helpers for predicates**: For complex filters beyond templates, combine with field helpers (see "Using Field Helpers" guide).
+- **Avoid dynamic raw SQL**: Stick to template-driven methods to maximize compile-time safety and avoid SQL injection risks.
+- **Test generated code**: Use generated query tests as references and for validation of your queries.
+- **Batch operations**: For complex batch filtering or updates, prefer the generated methods that accept slices and structs.
+
+---
+
+## 6. Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Generated Query Usage">
+<Accordion title="Method Not Found After Generation">
+Ensure your interface method comments contain valid SQL templates and that the generator ran successfully with no errors.
+</Accordion>
+<Accordion title="Query Returns Unexpected Results">
+Check your parameter values passed to query methods. Remember the SQL templates might enforce additional conditions (e.g., hardcoded `name="@name"`).
+</Accordion>
+<Accordion title="Build Fails with Missing Imports">
+Ensure you have imported the generated package correctly and that your Go module is tidy.
+</Accordion>
+<Accordion title="Compilation Errors Involving Generics">
+Verify your Go version is 1.18+ and that the `T any` syntax is supported.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 7. Next Steps & Related Content
+
+- **Using Field Helpers**: Learn to use model-driven field predicates to build expressive where clauses.
+- **Association Operations**: Explore how to use generated association helpers for CRUD on related entities.
+- **Customizing Generation**: Adjust code generation templates for your project’s conventions.
+- **Master the SQL Template DSL**: Deep dive into SQL templating capabilities within method comments.
+
+Refer to the [Guides Index](https://gorm.io/guides/) for detailed links.
+
+---
+
+## Appendix: Sample Generated SQL Methods Snippet
+
+```go
+func (e _QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+    var sb strings.Builder
+    params := make([]any, 0, 2)
+    sb.WriteString("SELECT * FROM ? WHERE id=? AND name = \"@name\"")
+    params = append(params, clause.Table{Name: clause.CurrentTable}, id)
+
+    var result T
+    err := e.Raw(sb.String(), params...).Scan(ctx, &result)
+    return result, err
+}
+
+func (e _QueryImpl[T]) UpdateInfo(ctx context.Context, user models.User, id int) error {
+    var sb strings.Builder
+    params := make([]any, 0, 4)
+    sb.WriteString("UPDATE ?")
+    params = append(params, clause.Table{Name: clause.CurrentTable})
+    {
+        var tmp strings.Builder
+        if user.Name != "" {
+            tmp.WriteString(" name=?,")
+            params = append(params, user.Name)
+        }
+        if user.Age > 0 {
+            tmp.WriteString(" age=?,")
+            params = append(params, user.Age)
+        }
+        if user.Age >= 18 {
+            tmp.WriteString(" is_adult=1")
+        } else {
+            tmp.WriteString(" is_adult=0")
+        }
+        c := strings.TrimSpace(tmp.String())
+        if c != "" {
+            c = strings.Trim(c, ", ")
+            sb.WriteString(" SET ")
+            sb.WriteString(c)
+        }
+    }
+    sb.WriteString(" WHERE id=?")
+    params = append(params, id)
+
+    return e.Exec(ctx, sb.String(), params...)
+}
+```
+
+This demonstrates the layered SQL building and safe parameter passing underpinning all generated methods.
