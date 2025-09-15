@@ -1,0 +1,239 @@
+---
+title: "Validation and Quick Usage"
+description: "How to check that generation succeeded, inspect generated APIs, and use them in your project for typical queries and updates. Targeted scenarios ensure you see immediate value."
+---
+
+# Validation and Quick Usage
+
+This guide helps you verify that your initial GORM CLI code generation succeeded, how to inspect the generated APIs, and how to use them effectively in your project. We focus on real-world scenarios to ensure you see immediate practical value by running typical queries, filters, and updates.
+
+---
+
+## 1. Confirming Generation Success
+
+After running the `gorm gen` command, your output directory should contain generated Go files reflecting your query interfaces and model-based field helpers.
+
+### How to Check
+
+- Locate the output folder you specified with `-o`. By default, this is `./g`.
+- Check for generated files named after your package or interfaces, e.g., `query.go`, `models.go`, or similar.
+- The console output during generation should include lines like:
+
+  ```
+  Generating file ./g/examples/output/query.go from ./examples/query.go...
+  ```
+
+- Ensure no errors appeared during generation.
+
+
+<Tip>
+If generation fails, revisit your interface definitions and configuration as documented in Defining Models and Query Interfaces and Basic Configuration.
+</Tip>
+
+---
+
+## 2. Inspecting Generated APIs
+
+GORM CLI generates two main types of code:
+
+- **Type-safe query interfaces** that implement your interface methods with underlying GORM query logic.
+- **Model-driven field helpers** that provide fluent, strongly typed filters and update helpers for model fields.
+
+### What to Look For
+
+- Open the generated `.go` files and find structs implementing your defined interfaces.
+- Look for methods matching your interface signatures with implementation bodies corresponding to your SQL templates.
+- View the generated `field` variables representing each model’s columns with methods like `.Eq()`, `.Like()`, `.Set()`, etc.
+
+Example snippet from generated APIs:
+
+```go
+func Query[User any](db *gorm.DB, opts ...clause.Expression) QueryInterface[User] {
+    return QueryImpl[User]{Interface: gorm.G[User](db, opts...) }
+}
+
+func (e QueryImpl[User]) GetByID(ctx context.Context, id int) (User, error) {
+    // Executes SELECT * FROM users WHERE id=@id ...
+}
+
+var User = struct {
+  ID field.Number[int]
+  Name field.String
+  Age field.Number[int]
+}{
+  ID: field.Number[int]{}.WithColumn("id"),
+  Name: field.String{}.WithColumn("name"),
+  Age: field.Number[int]{}.WithColumn("age"),
+}
+```
+
+---
+
+## 3. Using Generated APIs: Typical Queries and Updates
+
+Follow these steps to leverage the generated code in your Go project.
+
+### Step 1: Import Generated Package
+
+Include the generated code in your module by importing the output package path.
+
+```go
+import "your/module/generated"
+```
+
+### Step 2: Initialize DB Connection
+
+Ensure you have a `*gorm.DB` instance connected to your database.
+
+```go
+db := gorm.Open(...)
+```
+
+### Step 3: Run Sample Queries
+
+Use your generated query interface to run queries defined in your interfaces.
+
+```go
+// Create a new query instance
+query := generated.Query[models.User](db)
+
+// Get user by ID
+user, err := query.GetByID(ctx, 123)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("User: %+v\n", user)
+
+// Filter users by dynamic column
+filteredUser, err := query.FilterWithColumn(ctx, "role", "special")
+```
+
+### Step 4: Apply Filters Using Field Helpers
+
+You can build queries using the generated field helpers for expressive filtering:
+
+```go
+users := []models.User{}
+err := db.Where(
+    generated.User.Name.Eq("alice"),
+    generated.User.Age.Gt(18),
+).Find(ctx, &users)
+```
+
+### Step 5: Perform Updates with Generated Setters
+
+Update user data with type-safe setters:
+
+```go
+// Update info for user with ID 123
+err = query.UpdateInfo(ctx, models.User{Name: "alice", Age: 30}, 123)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+
+<Tip>
+Your generated methods auto-inject `context.Context` if omitted in the interface; always provide `ctx` when calling.
+</Tip>
+
+---
+
+## 4. Understanding Output and Validation
+
+Successful execution of generated queries indicates correct code generation and database integration.
+
+### Success Indicators
+
+- No compilation errors in generated code.
+- Query methods return expected data matching your SQL templates.
+- Field helper predicates generate expected SQL fragments.
+
+### Verifying SQL Execution
+
+Enable GORM logging to inspect generated SQL:
+
+```go
+db.Config.Logger = logger.Default.LogMode(logger.Info)
+```
+
+Check logs for expected SQL statements and parameter binding.
+
+
+---
+
+## 5. Common Pitfalls & Troubleshooting
+
+<AccordionGroup title="Troubleshooting Tips">
+<Accordion title="Empty Result Sets">
+- Verify your database contains test data matching query filters.
+- Confirm parameters passed to generated code are correct and not zero-values.
+</Accordion>
+<Accordion title="Compilation Errors After Generation">
+- Ensure input interface methods have proper return types (`error` as last return).
+- Check your `genconfig.Config` for filtering rules and mappings.
+</Accordion>
+<Accordion title="Generator Fails to Run">
+- Confirm Go version is 1.18+.
+- Check the CLI command options (`-i` for input, `-o` for output).
+- Run with verbose logs or debug flags if available.
+</Accordion>
+<Accordion title="Generated Code Not Reflecting Changes">
+- Clean the output directory and re-run generation.
+- Verify interface source files are correctly updated.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 6. Next Steps
+
+Once you have validated your generated code and run sample queries:
+
+- Explore advanced query methods in your interfaces.
+- Use model-driven field helpers for complex filters and updates.
+- Integrate the generated code into your application’s data access layer.
+- Review related guides on Working With Associations and Writing Template-based Queries for complex scenarios.
+
+---
+
+## Additional Resources
+
+- [Defining Models and Query Interfaces](/getting-started/first-code-generation/defining-models-and-interfaces)
+- [Running the Code Generator](/getting-started/first-code-generation/running-gorm-cli-gen)
+- [Basic Configuration](/getting-started/setup-and-installation/basic-configuration)
+- [Working with Associations: Patterns & Best Practices](/guides/advanced-use-cases/associations-best-practices)
+
+---
+
+# Example: Validation Test Snippet
+
+Below is an example test function excerpt illustrating common validation of generated query methods (taken from actual generated test code):
+
+```go
+func TestUserQueries(t *testing.T) {
+    db := setupTestDB(t)
+    users := seedUsers(t, db, models.User{Name: "@name", Age: 28, Role: "special"})
+
+    query := Query[models.User](db)
+
+    user, err := query.GetByID(context.Background(), int(users[0].ID))
+    if err != nil || user.Name != "@name" {
+        t.Errorf("GetByID failed: %v", err)
+    }
+
+    filteredUser, err := query.FilterWithColumn(context.Background(), "role", "special")
+    if err != nil || filteredUser.Role != "special" {
+        t.Errorf("FilterWithColumn failed: %v", err)
+    }
+}
+```
+
+This pattern ensures your generated API calls behave as expected with your test data.
+
+
+---
+
+By following these steps and checks, you'll quickly see the practical power of GORM CLI code generation and unlock productive, type-safe database access in your Go projects.
+
+---
