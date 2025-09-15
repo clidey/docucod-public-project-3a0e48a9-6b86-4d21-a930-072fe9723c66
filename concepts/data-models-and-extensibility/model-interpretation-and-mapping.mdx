@@ -1,0 +1,273 @@
+---
+title: "Model Interpretation & Mapping"
+description: "Examine how GORM CLI reads Go structs, identifies fields and associations, and maps them to generated helpers for predicates, updates, and relationship handling. Get clarity on naming, type treatment, and supported associations."
+---
+
+# Model Interpretation & Mapping
+
+GORM CLI translates your Go model structs into a rich set of generated helpers that provide type-safe predicates, update setters, and association handlers, empowering you to write fluent and resilient database queries. This page guides you through **how GORM CLI reads your structs**, identifies their fields—including associations—and **maps them to the generated Go code you interact with**. Understanding this mapping clarifies what is generated, why, and how to best structure your models for maximum benefit.
+
+---
+
+## Understanding Model Processing in GORM CLI
+
+When you run the `gorm gen` command, GORM CLI **parses your Go model structs**, extracting essential metadata about every field. This metadata drives the generation of:
+
+- **Field helpers** for each basic field (e.g., strings, ints, time.Time)
+- **Predicate methods** that support filter construction (e.g., `Eq()`, `Like()`, `Between()`)
+- **Update setters** for creating/updating values with strong typing
+- **Association helpers** for managing relationships (e.g., `Create()`, `Unlink()`, `Delete()`)
+
+This parsing focuses solely on your struct definitions and the associated Go types—no runtime reflection or database queries occur during generation.
+
+### Key Objectives of Model Interpretation
+
+- Detect all exported fields in your struct, including embedded fields (embedded structs are recursively processed).
+- Identify the Go type and its database column mapping.
+- Recognize special annotations, including struct tags like `gen:"json"`.
+- Determine associations based on your GORM tags and field types.
+- Map all these to the correct underlying helper types.
+
+
+---
+
+## Field Identification & Naming
+
+### Field Discovery
+
+GORM CLI uses the Go AST to parse each struct and collect:
+
+- **Field name:** The Go struct field name (e.g., `Name`, `Age`).
+- **Database column name:** Generated from field name or overridden by GORM tags (e.g., `is_adult`).
+- **Field type:** The Go type, including recognition of pointers, slices, and named types.
+- **Generator tag:** A special `gen` struct tag if present (e.g., `gen:"json"`).
+- **Embedded fields:** Recursively flattened into the parent struct fields.
+
+### Database Column Name Mapping
+
+By default, GORM CLI converts Go field names to snake_case for database columns (e.g., `CreatedAt` → `created_at`). If a field has a `gorm:"column:custom_name"` tag, that name is used instead. This ensures your generated helpers reflect the actual column names used in queries.
+
+### Example
+
+```go
+// User struct example excerpt
+type User struct {
+    ID        uint       // Maps to `id` column
+    Name      string     // Maps to `name`
+    IsAdult   bool       `gorm:"column:is_adult"`  // Maps to `is_adult`
+    Profile   string     `gen:"json"`             // mapped by custom field helper
+}
+```
+
+---
+
+## Field Type Treatment
+
+To generate meaningful helpers, GORM CLI assigns types to fields based on their Go types and config-driven mappings:
+
+### Basic Field Types
+
+These correspond to primitive types or standard types frequently used in models:
+
+- **Supported basic kinds:** `int`, `float64`, `string`, `bool`, `time.Time`, `[]byte`
+- **Named types:** Types implementing `Scanner`/`Valuer` interfaces or GORM serializers are also considered basic.
+
+Each basic field generates a typed field helper exposing predicates and setters, for example:
+
+- `generated.User.Age.Between(18, 65)` → `age BETWEEN 18 AND 65`
+- `generated.User.Name.Like("%alice%")` → `name LIKE '%alice%'`
+
+### Custom Field Helpers
+
+GORM CLI supports custom mappings for fields tagged with `gen:"..."` or via configuration:
+
+- Declaring `gen:"json"` for a string field generates a specialized JSON helper that emits dialect-specific SQL.
+- Configuration via `genconfig.Config` can map Go types or tags to particular helper types.
+
+### Associations as Special Field Types
+
+Relationships are identified by field Go types and GORM tags, then mapped to association helpers:
+
+| Association Type | Field Go Type            | GORM Tags                 | Helper Type            | Description                             |
+|------------------|-------------------------|--------------------------|------------------------|-----------------------------------------|
+| Belongs To       | Struct or pointer       | (no slice, contains FK)  | `field.Struct[T]`       | Refers to a single parent association  |
+| Has One          | Struct or pointer       | (child holds FK)         | `field.Struct[T]`       | One-to-one child association             |
+| Has Many         | Slice of struct pointers | `gorm:"foreignkey:..."` | `field.Slice[T]`        | One-to-many relationship                  |
+| Many To Many     | Slice of structs        | `gorm:"many2many:..."`| `field.Slice[T]`        | Many-to-many with join table             |
+
+### Example Associations
+
+```go
+// User struct with associations
+type User struct {
+    Account   Account           // has one
+    Pets      []*Pet            // has many
+    Languages []Language        `gorm:"many2many:UserSpeak"` // many2many
+    Manager   *User             // belongs to (self-referential)
+}
+```
+
+---
+
+## Generated Helper Mapping
+
+For each model struct processed, GORM CLI emits a Go variable (same name as the struct) containing field and association helpers. These helpers are the entry point to fluent, type-safe predicates and operations.
+
+### Helper Types and Usage
+
+| Helper Type           | Represents                                | Example Usage                          |
+|-----------------------|------------------------------------------|--------------------------------------|
+| `field.Field[T]`      | Single basic field                       | `User.Name.Eq("alice")`              |
+| `field.Number[T]`     | Numeric fields with generics (int, float)| `User.Age.Gt(18)`                     |
+| `field.String`        | String fields                           | `User.Email.Like("%@example.com")`  |
+| `field.Struct[T]`     | Single association                     | `User.Account.Create(...)`             |
+| `field.Slice[T]`      | Has many or many-to-many association    | `User.Pets.Where(...).Delete()`        |
+| Custom (e.g., JSON)   | Specialized custom helpers               | `User.Profile.Equal("$.vip", true)`  |
+
+### Value Binding
+
+Each generated field embeds the original database column or association name to transparently bind SQL parameters.
+
+---
+
+## Practical Example: From Struct to Generated Helpers
+
+Given the `User` model:
+
+```go
+// User model excerpt
+type User struct {
+    ID      uint
+    Name    string
+    Age     int
+    Profile string `gen:"json"`
+    Pets    []*Pet
+}
+```
+
+GORM CLI generates a variable named `User`:
+
+```go
+var User = struct {
+    ID      field.Number[uint]
+    Name    field.String
+    Age     field.Number[int]
+    Profile JSON
+    Pets    field.Slice[Pet]
+}{
+    ID:      field.Number[uint]{}.WithColumn("id"),
+    Name:    field.String{}.WithColumn("name"),
+    Age:     field.Number[int]{}.WithColumn("age"),
+    Profile: JSON{}.WithName("Profile"),
+    Pets:    field.Slice[Pet]{}.WithName("Pets"),
+}
+```
+
+This lets you construct queries fluently:
+
+```go
+// Find users older than 18
+users, err := gorm.G[User](db).
+    Where(User.Age.Gt(18)).
+    Find(ctx)
+
+// Create user with pets
+gorm.G[User](db).
+    Set(
+        User.Name.Set("alice"),
+        User.Pets.Create(generated.Pet.Name.Set("fido")),
+    ).
+    Create(ctx)
+```
+
+---
+
+## Special Cases and Considerations
+
+### Handling Embedded Fields
+
+Anonymous struct embeddings (e.g., `gorm.Model`) are flattened: their exported fields are treated as if declared directly on the parent struct.
+
+### Pointer Fields
+
+Pointer fields generate helpers with the underlying type, enabling `nil` detection and nullable field handling.
+
+### Polymorphic Associations
+
+GORM CLI recognizes polymorphic tags and generates appropriate helpers for these flexible relations (e.g., `Toys []Toy 'gorm:"polymorphic:Owner"'`).
+
+### Custom Type Mappings
+
+You can extend or override field helper generation by configuring the `genconfig.Config`:
+
+- Map Go field types to helper types
+- Map field name tags to custom helpers
+
+Example:
+
+```go
+var _ = genconfig.Config{
+    FieldNameMap: map[string]any{
+        "json": JSON{},  // use custom JSON helper
+    },
+}
+```
+
+### Limitations
+
+- Only **exported** struct fields are processed.
+- Unusual or dynamic field types without explicit config fall back to a generic helper.
+
+---
+
+## Troubleshooting & Tips
+
+- **Missing fields in generated code?** Ensure struct fields are exported and properly typed.
+- **Association helpers not generated?** Verify correct GORM association tags and types.
+- **Custom field helpers not working?** Confirm `genconfig.Config` mappings and struct tags.
+- **Column naming issues?** Check struct tags for `gorm:"column:xxx"` and naming conflicts.
+
+<Tip>
+Design your models clearly and annotate fields with appropriate GORM and generator tags to maximize the correctness and utility of generated helpers. This will save debugging effort later.
+</Tip>
+
+---
+
+## Visualization of Model Processing Flow
+
+```mermaid
+flowchart TD
+  A[User Go Struct] --> B{Analyze Fields}
+  B -->|Basic Field| C[Generate Field Helper]
+  B -->|Embedded Struct| D[Recursively Process Fields]
+  B -->|Association Field| E[Generate Association Helpers]
+  B -->|Tagged Field (Custom)| F[Apply Custom Helper Mapping]
+  C --> G[Add Field Helper to Generated Variable]
+  D --> G
+  E --> G
+  F --> G
+  G --> H[Complete Generated Struct Helper (e.g. generated.User)]
+```
+
+---
+
+## Summary
+
+This page demystifies how GORM CLI converts your Go structs into the powerful, type-safe Go helpers you consume in your application. By understanding the interpretation and mapping process,
+- You know how your models translate into generated code.
+- You can structure model fields and tags to ensure the helpers fit your query needs.
+- You gain confidence managing associations and custom fields.
+
+For practical guidance on using the generated helpers, see the **[Using the Generated APIs](../guides/getting-started-workflows/using-generated-apis)** and **[Working with Associations](../guides/advanced-patterns-customization/working-with-associations)** guides.
+
+---
+
+## Related Documentation
+
+- [What is GORM CLI?](../overview/introduction-and-value/what-is-gorm-cli) — Introduction and value proposition
+- [Feature Highlights](../overview/introduction-and-value/feature-highlights) — Core features overview
+- [Query Interfaces & Template DSL](./query-interface-and-template-dsl) — How SQL templates connect to generated APIs
+- [Custom Field Helpers](../guides/advanced-patterns-customization/custom-field-helpers) — Extending the generator for custom types
+- [Code Generation Workflow](../concepts/architecture-and-core-concepts/code-generation-workflow) — End-to-end process including model parsing
+
+---
