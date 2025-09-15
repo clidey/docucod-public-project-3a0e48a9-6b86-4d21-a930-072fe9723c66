@@ -1,0 +1,268 @@
+---
+title: "Validating Setup & Usage"
+description: "Confirm your setup by running sample queries, basic CRUD operations, and field helper calls in your project. See how to use generated code in typical read/write operations, ensuring the CLI and integration with GORM are working correctly."
+---
+
+# Validating Setup & Usage
+
+Confirm your GORM CLI setup by running sample queries, basic CRUD operations, and field helper calls within your Go project. This guide walks you through practical examples that showcase how to leverage the generated code for typical read/write operations, ensuring your CLI installation and integration with GORM work flawlessly.
+
+---
+
+## 1. Overview
+
+After generating code with GORM CLI, you want to validate that your environment, code generation, and integration with your GORM project function as expected. This page uses common examples — including simple queries, CRUD operations, and use of field helpers — to confirm the generated APIs produce correct and type-safe SQL queries.
+
+These examples mimic real-world usage, illustrating how to interact with your database fluently using the generated query interfaces and model-driven field helpers.
+
+---
+
+## 2. Setting Up a Test Database
+
+Before running any generated query code, ensure you have a test database initialized and migrated with your model schemas. The examples use an in-memory SQLite database for rapid iteration and isolation.
+
+<Steps>
+<Step title="Initialize In-Memory SQLite">
+Create a new SQLite open connection uniquely named per test, using the following Go pattern:
+
+```go
+dsn := "file:query-<test_name>?mode=memory&cache=shared"
+db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+if err != nil {
+    log.Fatalf("failed to connect database: %v", err)
+}
+```
+
+This ensures fresh isolated DB state for each test.
+</Step>
+<Step title="Run Migrations">
+Run database migrations for all your involved models and their associations:
+
+```go
+err = db.AutoMigrate(&models.User{}, &models.Account{}, &models.Pet{}, &models.Toy{}, &models.Company{}, &models.Language{})
+if err != nil {
+    log.Fatalf("failed to migrate database: %v", err)
+}
+```
+
+This step prepares the schema matching your Go structs.
+</Step>
+</Steps>
+
+<Tip>
+Use the environment variable `DEBUG=true` to enable verbose SQL logging on the GORM DB instance, which helps monitor generated queries during tests.
+</Tip>
+
+---
+
+## 3. Seeding Sample Data
+
+To test queries, create initial data sets representing typical application domain entities.
+
+```go
+users := []models.User{
+  {Name: "alice", Age: 20, Role: "active", IsAdult: true},
+  {Name: "bob", Age: 17, Role: "active", IsAdult: false},
+  {Name: "cathy", Age: 30, Role: "pending", IsAdult: true},
+  {Name: "dan", Age: 40, Role: "pending", IsAdult: true},
+}
+err := db.Create(&users).Error
+if err != nil {
+  log.Fatalf("failed to seed users: %v", err)
+}
+```
+
+This provides realistic user records for your first queries.
+
+---
+
+## 4. Running Sample Queries Using Generated Code
+
+Validate the generated query interface and field helpers with concrete example operations. Assume your generated package is imported as `generated`.
+
+### 4.1 Basic Select By ID
+
+Use the query interface's `GetByID` method which fetches a record by primary key.
+
+```go
+ctx := context.Background()
+user, err := generated.Query[models.User](db).GetByID(ctx, 1)
+if err != nil {
+    log.Fatalf("GetByID failed: %v", err)
+}
+fmt.Println("User name:", user.Name)
+```
+
+**Expected outcome:** Retrieves the user with ID 1 (`"alice"`) successfully.
+
+### 4.2 Filtering by Field Conditions
+
+Leverage generated field helpers to build type-safe filtering predicates.
+
+```go
+adultUsers, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18)).
+  Find(ctx)
+if err != nil {
+  log.Fatalf("Find adult users failed: %v", err)
+}
+fmt.Printf("Found %d adult users\n", len(adultUsers))
+```
+
+**Expected outcome:** Returns all users with `Age > 18` (e.g., "alice", "cathy", "dan").
+
+### 4.3 Using Generated Query Interface with SQL Templates
+
+Example using a method with embedded SQL template like `FilterByNameAndAge`:
+
+```go
+results, err := generated.Query[models.User](db).FilterByNameAndAge("bob", 17).Find(ctx)
+if err != nil {
+  log.Fatalf("FilterByNameAndAge failed: %v", err)
+}
+fmt.Println("Filtered user count:", len(results))
+```
+
+---
+
+## 5. Demonstrating Create and Update Operations
+
+Showcase how to perform writes using the generated field helpers.
+
+### 5.1 Creating a Record with Associations
+
+Create a new user and associate a pet in a single operation.
+
+```go
+err = gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("eve"),
+    generated.User.Age.Set(28),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fluffy")),
+  ).
+  Create(ctx)
+if err != nil {
+  log.Fatalf("Failed to create user with pet: %v", err)
+}
+```
+
+### 5.2 Updating Records Conditionally
+
+Update a user's age and role using the field helpers and generated APIs.
+
+```go
+err = gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice")).
+  Set(
+    generated.User.Age.Set(21),
+    generated.User.Role.Set("active"),
+  ).
+  Update(ctx)
+if err != nil {
+  log.Fatalf("Failed to update alice: %v", err)
+}
+```
+
+### 5.3 Using Query Interface's Update Method
+
+Using your query interface method that runs SQL with conditional SET clauses:
+
+```go
+err = generated.Query[models.User](db).UpdateInfo(ctx, models.User{Name: "alice", Age: 22}, 1)
+if err != nil {
+  log.Fatalf("UpdateInfo failed: %v", err)
+}
+```
+
+---
+
+## 6. Working with Associations
+
+Demonstrate unlinking and deleting associated records safely.
+
+```go
+// Unlink user's pets without deleting
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+if err != nil {
+  log.Fatalf("Unlink pets failed: %v", err)
+}
+
+// Delete pets with name "fluffy"
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fluffy")).Delete()).
+  Update(ctx)
+if err != nil {
+  log.Fatalf("Delete pets failed: %v", err)
+}
+```
+
+This validates the generated association helpers operate according to semantics.
+
+---
+
+## 7. Using Field Helpers with Complex Predicates
+
+Try compound predicates like BETWEEN, LIKE, or IS NULL.
+
+```go
+usersAge18To30, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Between(18, 30)).
+  Find(ctx)
+
+likeBob, err := gorm.G[models.User](db).
+  Where(generated.User.Name.Like("%bob%"))
+  .Find(ctx)
+
+nullScores, err := gorm.G[models.User](db).
+  Where(generated.User.Score.IsNull()).
+  Find(ctx)
+```
+
+These operations confirm the field helper API supports rich SQL predicate building.
+
+---
+
+## 8. Interpreting Results and Troubleshooting
+
+### Common Issues
+
+- **No records found:** Ensure you seeded data before querying and your filters match existing records.
+- **Method not found or interface errors:** Confirm that generation completed without error and your project imports the generated package correctly.
+- **SQL syntax errors:** Turn on debug logs (`DEBUG=true`) and verify your SQL templates syntax.
+
+### Tips
+
+- Use the CLI with explicit input and output flags for deterministic generation:
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+- Always run migrations before querying to match your model schema.
+- Test your queries inside unit test setups with isolated in-memory databases.
+
+---
+
+## 9. Next Steps
+
+- Explore the [First Code Generation guide](../quickstart-validation/first-code-generation) to deepen your understanding of the generation process.
+- Refer to [Field Helpers documentation](../../guides/core-workflows/guide-field-helpers) for advanced usage patterns.
+- Visit the [Troubleshooting Common Issues](../quickstart-validation/troubleshooting-common-issues) page if you encounter setup problems.
+
+---
+
+## Related Resources
+
+- [Quickstart & Typical Workflow](/overview/features-workflows/quickstart-workflow)
+- [GORM CLI Installation](/getting-started/introduction-setup/installation)
+- [Configuring GORM CLI](/getting-started/introduction-setup/configuration-setup)
+
+---
+
+This guide ensures you validate your GORM CLI integration successfully with straightforward, realistic examples of generated code in action.
+
+
