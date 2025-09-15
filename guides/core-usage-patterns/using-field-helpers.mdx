@@ -1,0 +1,293 @@
+---
+title: "Using Field Helpers for Queries and Updates"
+description: "Master the use of model-driven field helpers to write expressive queries, updates, and filtering logic. Explore predicates, set/expr helpers, and advanced field usage through hands-on examples based on real models."
+---
+
+# Using Field Helpers for Queries and Updates
+
+Master the use of model-driven field helpers to write expressive, type-safe queries, updates, and filtering logic in your GORM CLI-generated code. This guide will walk you through predicates, setters, expressions, and advanced usage scenarios, enabling you to leverage the full power of the generated helpers based on your Go model structs.
+
+---
+
+## Workflow Overview
+
+### What This Guide Helps You Achieve
+- Understand how to use generated model-driven field helpers for building queries and update statements.
+- Learn how to write complex conditions using predicates such as `Eq()`, `Gt()`, `Between()`, and helpers for setting values like `Set()`, `Incr()`, and SQL expressions.
+- Gain practical examples of composing multiple conditions and updates with zero and non-zero values.
+- Explore best practices for working with nullable fields and composing predicates.
+
+### Prerequisites
+- You have successfully generated code from your model structs using GORM CLI.
+- You are familiar with Go and the basic GORM package usage.
+- You have sample models defined (e.g., `User`) and the corresponding generated helpers available (e.g., `generated.User`).
+
+### Expected Outcome
+By following this guide, you will confidently:
+- Write fluent, compile-time safe queries using field predicates.
+- Perform updates and inserts with fine-grained control using setters and expressions.
+- Handle nullable fields and complex filtering logic without writing raw SQL.
+
+### Time Estimate
+Approximately 15-20 minutes to grasp the core concepts and examples.
+
+### Difficulty Level
+Intermediate—basic knowledge of Go and GORM is assumed.
+
+---
+
+## Step-by-Step Instructions
+
+### 1. Access Generated Field Helpers
+The generated code creates a variable for each model, exposing strongly typed field helpers corresponding to your struct fields.
+
+Example for `User` model:
+
+```go
+var User = struct {
+    ID        field.Number[uint]
+    Name      field.String
+    Age       field.Number[int]
+    IsAdult   field.Bool
+    Score     field.Field[sql.NullInt64]
+    // ... other fields
+}{
+    ID:        field.Number[uint]{}.WithColumn("id"),
+    Name:      field.String{}.WithColumn("name"),
+    Age:       field.Number[int]{}.WithColumn("age"),
+    IsAdult:   field.Bool{}.WithColumn("is_adult"),
+    Score:     field.Field[sql.NullInt64]{}.WithColumn("score"),
+}
+```
+
+You use these helpers in your queries and updates.
+
+### 2. Building Queries Using Predicates
+Use the available predicates to build SQL conditions fluently.
+
+Common predicates include:
+
+- `Eq(val)` — equal to
+- `Neq(val)` — not equal
+- `Gt(val)` — greater than
+- `Gte(val)` — greater than or equal
+- `Lt(val)` — less than
+- `Lte(val)` — less than or equal
+- `Between(low, high)` — BETWEEN
+- `Like(pattern)` — LIKE
+- `IsNull()` / `IsNotNull()` — IS NULL / IS NOT NULL
+
+Example: Find users older than 18 with role "active":
+
+```go
+users, err := gorm.G[models.User](db).
+    Where(
+        generated.User.Age.Gt(18),
+        generated.User.Role.Eq("active"),
+    ).
+    Find(ctx)
+```
+
+After executing, `users` contains all matching entries.
+
+### 3. Updating Records Using Setters
+To update records, use the `Set()` method with field helpers that assign new values.
+
+Setters commonly available:
+
+- `Set(value)` — set field value
+- `Incr(amount int)` — increment numeric fields
+- `SetExpr(clause.Expr)` — use SQL expression
+- Specialized helpers like `Upper()` for string uppercase conversion
+
+Example: Flip role from "pending" to "active":
+
+```go
+rows, err := gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending"))
+    .Set(generated.User.Role.Set("active"))
+    .Update(ctx)
+```
+
+`rows` indicates how many records were updated.
+
+### 4. Creating Records with Field Helpers
+Field helpers support setting values when creating new records as well.
+
+Example: Create a new user with specific values:
+
+```go
+err := gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Age.Set(29),
+        generated.User.Role.Set("active"),
+        generated.User.IsAdult.Set(true),
+    ).
+    Create(ctx)
+```
+
+The new entry is inserted with the provided values.
+
+### 5. Handling Zero Values and Nullable Fields
+Generated setters support zero values explicitly, ensuring meaningful updates for boolean, numeric zero, empty string, and nullable SQL types.
+
+For nullable types (e.g., `sql.NullInt64`), you can set fields to NULL by passing zero-valued structs.
+
+Example: Update a user to zero values:
+
+```go
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice"))
+    .Set(
+        generated.User.Age.Set(0),                 // int zero
+        generated.User.IsAdult.Set(false),         // bool zero
+        generated.User.Role.Set(""),             // empty string
+        generated.User.Score.Set(sql.NullInt64{}), // NULL
+    ).
+    Update(ctx)
+```
+
+### 6. Combining Multiple Predicates and Setters
+You can chain multiple conditions and set operations together to express complex queries and updates.
+
+Example: Increment age and reset score for user "bob":
+
+```go
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob"))
+    .Set(
+        generated.User.Age.Incr(1),
+        generated.User.Score.Set(sql.NullInt64{}),
+    ).
+    Update(ctx)
+```
+
+### 7. Using SQL Expressions with SetExpr
+For advanced updates requiring raw SQL expressions, use `SetExpr()` with `gorm.io/gorm/clause.Expr`.
+
+Example: Increase age by 2:
+
+```go
+import "gorm.io/gorm/clause"
+
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("cathy"))
+    .Set(
+        generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{2}}),
+    ).
+    Update(ctx)
+```
+
+This generates SQL to update the age column by adding 2.
+
+### 8. Filtering with Nullable and Custom Field Types
+For nullable fields, use `IsNull()` and `IsNotNull()` predicates to filter rows where columns are NULL or not.
+
+Example: Find users where the `LastLogin` column is NULL:
+
+```go
+users, err := gorm.G[models.User](db).
+    Where(generated.User.LastLogin.IsNull()).
+    Find(ctx)
+```
+
+For custom field helpers like JSON, you can leverage specialized predicates.
+
+Example: Filter users whose JSON profile has a VIP flag:
+
+```go
+user, err := gorm.G[models.User](db).
+    Where(generated.User.Profile.Equal("$.vip", true)).
+    Take(ctx)
+```
+
+---
+
+## Examples & Code Samples
+
+### Query with Multiple Conditions
+```go
+db := setupTestDB(t)
+var filteredUsers []models.User
+err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Scan(ctx, &filteredUsers)
+```
+
+### Update Using Setters and Expressions
+```go
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Set(
+        generated.User.Role.Set("active"),
+        generated.User.Age.Incr(1),
+    ).
+    Update(ctx)
+```
+
+### Creating a Record
+```go
+err := gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("newuser"),
+        generated.User.Age.Set(30),
+        generated.User.IsAdult.Set(true),
+    ).
+    Create(ctx)
+```
+
+### Filtering with NULL Predicates
+```go
+users, err := gorm.G[models.User](db).
+    Where(generated.User.Score.IsNotNull()).
+    Find(ctx)
+```
+
+### Advanced: Using SQL Expressions
+```go
+_, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(
+        generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{5}}),
+    ).
+    Update(ctx)
+```
+
+---
+
+## Troubleshooting & Tips
+
+### Common Issues
+- **No results or no updates:** Confirm that your predicates match actual data rows.
+- **Nullable fields ignored:** Use `IsNull()` or set values with the appropriate zero-value struct to handle NULLs explicitly.
+- **Setters not applying zero values:** Always use the provided setter methods explicitly for zero values; direct zero assignments may be ignored.
+
+### Best Practices
+- Use field helpers consistently rather than raw SQL strings to maintain type safety.
+- Combine multiple predicates in a single `Where()` call for clarity and optimized queries.
+- Use `SetExpr()` judiciously for complex updates to avoid SQL injection and maintain readability.
+- Leverage nullable-aware predicates to precisely filter your dataset.
+
+### Performance Considerations
+- Composing queries with multiple predicates is efficient and compiles down to optimized SQL with parameters.
+- Avoid unnecessary updates by filtering precisely—use `Where()` with correct predicates.
+
+---
+
+## Next Steps & Related Content
+- Explore **Working with Associations: Create, Update, Unlink, Delete** to manage relationships with generated helpers.
+- Learn about **Template-Based Queries** for advanced SQL templating within interfaces.
+- Customize your generation with **Configuring Code Generation: genconfig.Config** for field mapping and filtering.
+- Validate your setup with **Quick Validation and Testing** to ensure generated helpers work as expected.
+
+---
+
+## Additional Resources
+- [GORM CLI Product Overview](../overview/introduction-core-concepts/product-overview)
+- [Generated APIs Guide](../getting-started/onboarding-core/using-generated-apis)
+- [Field Helpers and Strong Typing Concepts](../../concepts/type-safety-field-helpers/field-helper-architecture)
+
+---
+
+You are now equipped to harness the power of generated field helpers to construct robust, readable, and safe database queries and updates in Go with GORM CLI.
