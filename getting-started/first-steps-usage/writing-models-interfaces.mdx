@@ -1,0 +1,256 @@
+---
+title: "Writing Your First Models and Query Interfaces"
+description: "Learn how to define your GORM models and query interfaces with SQL templates that are required for generation. See practical code examples to get started, and understand the key structure expected by the CLI."
+---
+
+# Writing Your First Models and Query Interfaces
+
+Learn how to define your GORM models and query interfaces with embedded SQL templates that the GORM CLI code generator requires. This guide provides actionable examples to craft your model structs and interface-driven query APIs, helping you prepare the source files the CLI expects for code generation.
+
+---
+
+### 1. Defining Your GORM Models
+
+Your Go struct models represent the core data entities mapped to database tables. These models must be properly structured to allow the CLI to generate type-safe field helpers and manage associations.
+
+#### Key Points:
+- Models are ordinary Go structs with fields representing columns.
+- Support for common Go types (`int`, `string`, `bool`, etc.), time types, SQL nullable types, and nested structs.
+- Use GORM tags for customizing DB column names (`gorm:"column:name"`), primary keys, associations, and polymorphic fields.
+- Use `gen` struct tags to map fields to special field helper types when needed (e.g., `gen:"json"`).
+
+#### Example Model: User with Associations and Special Fields
+```go
+package models
+
+import (
+  "database/sql"
+  "time"
+
+  "gorm.io/gorm"
+)
+
+type User struct {
+  gorm.Model
+  Name      string
+  Age       int
+  Birthday  *time.Time
+  Score     sql.NullInt64
+  LastLogin sql.NullTime
+  Account   Account           // Has one
+  Pets      []*Pet            // Has many
+  Toys      []Toy             `gorm:"polymorphic:Owner"` // Polymorphic has many
+  CompanyID *int
+  Company   Company           // Belongs to
+  ManagerID *uint
+  Manager   *User             // Belongs to (single-table)
+  Team      []User            `gorm:"foreignkey:ManagerID"` // Has many (single-table)
+  Languages []Language        `gorm:"many2many:UserSpeak"`  // Many-to-many
+  Friends   []*User           `gorm:"many2many:user_friends"` // Many-to-many single-table
+  Role      string
+  IsAdult   bool              `gorm:"column:is_adult"`
+  Profile   string            `gen:"json"`  // mapped to a JSON helper
+}
+
+// Related structs for associations
+
+type Account struct {
+  gorm.Model
+  UserID       sql.NullInt64
+  Number       string
+  RewardPoints sql.NullInt64
+  LastUsedAt   sql.NullTime
+}
+
+type Pet struct {
+  gorm.Model
+  UserID *uint
+  Name   string
+  Toy    Toy `gorm:"polymorphic:Owner;"`
+}
+
+type Toy struct {
+  gorm.Model
+  Name      string
+  OwnerID   uint
+  OwnerType string
+}
+
+type Company struct {
+  ID   int
+  Name string
+}
+
+type Language struct {
+  Code string `gorm:"primarykey"`
+  Name string
+}
+```
+
+---
+
+### 2. Writing Query Interfaces with SQL Templates
+
+The CLI reads Go interfaces with method signatures and SQL template comments. It generates type-safe query APIs based on these definitions.
+
+#### Structure and Expectations
+- Define your query interfaces as **generic interfaces** with type parameter `[T any]`.
+- Each method corresponds to a query operation, with parameters for filtering or updating.
+- Method comments contain SQL templates or DSL that GORM CLI processes.
+  - Use placeholders like `@@table`, `@@column`, `@param` for binding.
+  - Support directives such as `{{where}}`, `{{set}}`, `{{if}}`, and `{{for}}`.
+- The CLI auto-injects a `context.Context` parameter if missing.
+- Return types must include error handling, typically `(T, error)` or `(error)`.
+
+#### Example Query Interface with Embedded SQL Templates
+```go
+package examples
+
+import (
+  "time"
+  "gorm.io/cli/gorm/examples/models"
+)
+
+type Query[T any] interface {
+
+  // GetByID retrieves a record by primary id
+  //
+  // SELECT * FROM @@table WHERE id=@id AND name="\@name"
+  GetByID(id int) (T, error)
+
+  // FilterWithColumn queries by any column dynamically
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // QueryWith applies conditional WHERE clauses based on user fields
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{if user.ID > 0}}
+  //       WHERE id=@user.ID
+  //   {{else if user.Name != ""}}
+  //       WHERE name=@user.Name
+  //   {{end}}
+  // {{end}}
+  QueryWith(user models.User) (T, error)
+
+  // UpdateInfo updates selected fields conditionally
+  // UPDATE @@table
+  //  {{set}}
+  //    {{if user.Name != ""}} name=@user.Name, {{end}}
+  //    {{if user.Age > 0}} age=@user.Age, {{end}}
+  //    {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+  //  {{end}}
+  // WHERE id=@id
+  UpdateInfo(user models.User, id int) error
+
+  // Filter accepts a slice of users to build complex OR conditions
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{for _, user := range users}}
+  //     {{if user.Name != "" && user.Age > 0}}
+  //       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+  //     {{end}}
+  //   {{end}}
+  // {{end}}
+  Filter(users []models.User) ([]T, error)
+
+  // FilterByNameAndAge combines simple filtering with raw WHERE string
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+
+  // FilterWithTime filters records created in a time range
+  // SELECT * FROM @@table
+  //  {{where}}
+  //    {{if !start.IsZero()}}
+  //      created_at > @start
+  //    {{end}}
+  //    {{if !end.IsZero()}}
+  //      AND created_at < @end
+  //    {{end}}
+  //  {{end}}
+  FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+---
+
+### 3. Understanding the SQL Templating DSL
+
+The CLI supports a powerful SQL templating syntax within method comments:
+
+| Directive   | Purpose                           | Example
+|-------------|---------------------------------|--------------------------------------------------|
+| `@@table`   | Resolves to the SQL table name   | `SELECT * FROM @@table WHERE id=@id`
+| `@@column`  | Binds column dynamically         | `WHERE @@column=@value`
+| `@param`    | Parameter binding                | `WHERE name=@user.Name`
+| `{{where}}` | Wraps conditional WHERE clauses | `{{where}} age > 18 {{end}}`
+| `{{set}}`   | Wraps conditional UPDATE SET clauses | `{{set}} name=@name {{end}}`
+| `{{if}}`    | Conditionals to include/exclude SQL fragments | `{{if age > 0}} AND age=@age {{end}}`
+| `{{for}}`   | Iterate over collections          | `{{for _, tag := range tags}} ... {{end}}`
+
+This DSL allows dynamic generation of precise, optimized queries based on method parameters.
+
+---
+
+### 4. Practical Tips and Best Practices
+
+- **Keep models clean**: Add only exported fields; use GORM's conventions and tags for clarity.
+- **Use context.Context**: The CLI will add it if not present; but explicitly including it improves readability.
+- **Comment SQL carefully**: Follow exact SQL syntax and placeholders as shown in examples to ensure correct parsing.
+- **Leverage generated field helpers**: Use them in your application code for type-safe query building.
+- **Map special fields**: Use `gen` struct tags combined with `genconfig.Config` to customize field helper types like JSON or time.
+- **Test incrementally**: Start with simple interfaces and expand to conditional templates.
+
+---
+
+### 5. What Happens Next?
+
+After defining models and query interfaces as shown:
+
+1. Run the CLI `gorm gen` command to generate the code. This will process your interfaces and structs, create type-safe APIs, and build field helpers.
+2. Use the generated APIs in your application code for expressive, safe database operations.
+3. Refer to the `Generating Code with GORM CLI` and `Using the Generated APIs in Your Project` guides for complete workflows.
+
+---
+
+### 6. Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Tips">
+<Accordion title="Methods Without Correct Return Types">
+Ensure all interface methods returning data include an error as the last return value. For example, `(T, error)` or `error` only. Missing or incorrectly typed return values will cause generation errors.
+</Accordion>
+<Accordion title="Improper SQL Template Syntax">
+Check your comments carefully. The CLI expects exact format and placeholders. Unexpected line breaks or missing directives (`{{where}}`, `@@table`) can cause parsing errors.
+</Accordion>
+<Accordion title="Models with Unexported Fields or Anonymous Embedding">
+Only exported fields are processed. Anonymous embedding is handled but ensure embedded structs are also properly exported and defined.
+</Accordion>
+<Accordion title="Missing or Incorrect Package Level Configurations">
+If you customize field mappings, ensure `genconfig.Config` is correctly defined in the package to apply overrides. Without it, defaults are used.
+</Accordion>
+</AccordionGroup>
+
+---
+
+For an overarching understanding of the generated code structure and CLI workflow, visit our [System Architecture](../overview/architecture-core-concepts/system-architecture-diagram) documentation.
+
+
+---
+
+### Related Examples
+
+- Example query interface: `/examples/query.go`
+- Example model definitions: `/examples/models/user.go`
+- Configuration examples for selective generation: `/examples/filters/pattern/config.go`
+
+---
+
+### References
+
+- [GORM CLI Product Introduction & Value](../overview/what-is-gorm-cli/product-introduction)
+- [Template-based Queries Guide](../../guides/advanced-patterns/template-based-queries)
+- [Generation Configuration](../getting-started/first-steps-usage/generating-code#configuration)
+
+---
+
+*Start your journey with well-structured models and expressive interfaces to unlock the full power of GORM CLI code generation.*
