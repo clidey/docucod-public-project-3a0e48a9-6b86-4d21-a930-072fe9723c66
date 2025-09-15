@@ -1,0 +1,261 @@
+---
+title: "Associations and Relationship Operations"
+description: "Clarify association types (has one, has many, belongs to, many2many) and how field helpers encode their semantics. Walk through supported operations like Create, Update, Unlink, Delete, and batch linking, and how these map to Go types and GORM concepts."
+---
+
+# Associations and Relationship Operations
+
+Understanding and managing relationships between your data models is fundamental for building effective applications with GORM CLI. This page clarifies the types of associations supported, how generated field helpers encode these semantics, and walks you through practical operations such as creating, updating, unlinking, deleting, and batch linking associated records.
+
+---
+
+## What Are Associations?
+
+In relational databases and object-relational mapping (ORM), **associations** represent the relationships between different entities. GORM CLI recognizes these relationships in your Go model structs and generates type-safe helpers to manage them effectively, minimizing runtime errors and enhancing developer productivity.
+
+The key association types supported are:
+
+- **Has One**: One record owns exactly one associated record.
+- **Has Many**: One record owns multiple associated records.
+- **Belongs To**: One record belongs to another, meaning it holds the foreign key of the parent.
+- **Many2Many**: Records are associated in a many-to-many relationship via a join table.
+- **Polymorphic**: Special associations where the related model can belong to multiple other models on a single association.
+
+
+## How Field Helpers Encode Association Semantics
+
+GORM CLI generates field helpers from your Go struct models that encapsulate the association details and provide intuitive, type-safe operations.
+
+### Types of Association Field Helpers
+
+- **`field.Struct[T]`**: Represents a single association (e.g., `has one`, `belongs to`). Here, `T` is the associated type.
+- **`field.Slice[T]`**: Represents multiple associations (e.g., `has many`, `many2many`). Here, `T` is the element type of the slice representing associated records.
+
+These helpers implement methods such as `Create`, `Update`, `Unlink`, `Delete`, and `CreateInBatch` that correspond to common relational operations with precise, predictable side effects.
+
+
+## Supported Association Types and Their Semantics
+
+| Association Type | Description                                                      | Foreign Key Location       | Unlink Behavior                                   | Delete Behavior                                   |
+|------------------|------------------------------------------------------------------|---------------------------|--------------------------------------------------|--------------------------------------------------|
+| Has One          | One record with exactly one associated record                    | Child contains foreign key | Sets child's FK to NULL (keeps record)            | Deletes child record                             |
+| Has Many         | One record with multiple associated records                      | Child contains foreign key | Sets all matching child's FK to NULL              | Deletes all matching child records              |
+| Belongs To       | Child record references exactly one parent                       | Parent contains foreign key | Sets parent's FK to NULL (keeps parent record)    | Deletes parent record (rarely used)             |
+| Many2Many        | Many-to-many relationship via a join table                       | Join table                 | Removes join table rows only                        | Removes join table rows only (associated rows remain)|
+| Polymorphic      | Relationships where association could be with multiple models   | Polymorphic keys on child | Clears polymorphic keys (sets to zero or NULL)    | Deletes associated records                       |
+
+
+## Association Operations
+
+### 1. Creating Associations
+
+Create operations setup and link associated records for each matched parent. Use `Set(...).Create(...)` within an update or create flow.
+
+- **Single association (has one, belongs to):** Use `field.Struct[T].Create(assignments...)`.
+- **Multiple association (has many, many2many):** Use `field.Slice[T].Create(assignments...)` or batch creation via `CreateInBatch([]T)`.
+
+Example: Creating a new user with one pet and linked languages.
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Create(ctx)
+```
+
+
+### 2. Updating Associations
+
+Update operations modify existing associated records matching optional conditions. Chain `Where(...)` with conditions before calling `Update(...)`.
+
+Example: Update a user's pet name where the pet name is 'fido'.
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(
+      generated.Pet.Name.Set("rex"),
+    ),
+  ).
+  Update(ctx)
+```
+
+
+### 3. Unlinking Associations
+
+Unlink removes the association without deleting the associated records.
+
+- **Has one / has many:** Foreign key on child is set to `NULL`.
+- **Belongs to:** Foreign key on parent is set to `NULL`.
+- **Many2Many:** Join table rows are deleted, associated records remain intact.
+
+Use method `Unlink()` to perform unlinking.
+
+Example: Unlink all pets from a user (retaining pets).
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+
+### 4. Deleting Associations
+
+Delete operations remove associated records (or join rows in many2many) and cannot be undone.
+
+- For **has one/has many**: deletes child records.
+- For **belongs to**: deletes parent records.
+- For **many2many**: deletes the join table rows only, leaving associated records.
+
+Example: Delete a user's pet where the pet name is 'a'.
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("a")).Delete()).
+  Update(ctx)
+```
+
+
+### 5. Batch Linking Associations
+
+Batch create lets you link multiple existing or new associated records at once.
+
+- Use `CreateInBatch([]T)` on slice associations.
+
+Example: Link multiple pets to a user in batch.
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.CreateInBatch([]models.Pet{{Name: "bm1"}, {Name: "bm2"}})).
+  Update(ctx)
+```
+
+
+## Association Operation Summary Table
+
+| Operation        | Has One / Belongs To              | Has Many                     | Many2Many                      |
+|------------------|---------------------------------|------------------------------|-------------------------------|
+| Create           | Create one associated record     | Create one or many records    | Create join table rows or records |
+| Update           | Update one associated record     | Update matching associated records | Update matching join rows or records |
+| Unlink           | Set FK NULL, keep record         | Set FK NULL for matching children | Delete join rows, keep records    |
+| Delete           | Delete associated record         | Delete matching child records | Delete join rows only            |
+| CreateInBatch    | Not applicable                   | Batch create/link many records | Batch create/link many records  |
+
+
+## Practical Tips & Best Practices
+
+- **Always prefer `Unlink` when you want to dissociate without data loss.**
+- Use conditional filters (`Where`) to target specific associated records precisely.
+- Batch create operations can greatly improve performance when linking multiple associations.
+- Understand your association type to anticipate the effect of `Unlink` or `Delete`.
+- Use generated field helpers for compile-time safety and discoverability.
+- For polymorphic associations (e.g., pets owning toys), the field helpers handle mapping and foreign keys transparently.
+
+
+## Real-World User Flows
+
+### Flow: Creating a User with Associations
+
+1. User calls `Set(...)` with fields and related association `Create(...)` or `CreateInBatch(...)`.
+2. User calls `.Create(ctx)` to insert the parent and all associated records.
+3. All associations are created atomically and the foreign keys correctly linked.
+
+### Flow: Updating Associated Records Conditionally
+
+1. User specifies a `Where(...)` clause on an association helper to filter target associations.
+2. User calls `.Update(...)` with new values.
+3. Matching associated records are updated according to the filter.
+
+### Flow: Removing Associations
+
+1. User chooses `Unlink()` or `Delete()` depending on whether to keep or remove associated records.
+2. Calls `Set(...).Update(ctx)` on the parent to apply the change.
+3. Foreign keys or join rows are cleared or deleted accordingly.
+
+
+## Troubleshooting Common Issues
+
+<AccordionGroup title="Common Challenges and Solutions">
+<Accordion title="Create association fails to link properly">
+Verify that `Set(...)` with `Create(...)` is called on the association field helper of the parent model, and that the primary keys or foreign keys are correctly configured in your model structs.
+</Accordion>
+<Accordion title="Updating associations affects too many records">
+Make sure to use `.Where(...)` on the association helper to scope the update to specific related records. Without filters, all associated records may be updated.
+</Accordion>
+<Accordion title="Unlink doesn't clear associations">
+Ensure the association type is supported by unlink semantics. For many2many, unlink removes join rows; for has one/has many, it sets FK to NULL. If FK is non-nullable, unlink will fail.
+</Accordion>
+<Accordion title="Delete unexpectedly removes parent or unrelated data">
+Confirm that `Delete()` is called on the association helper, not on the main model or via `db.Delete` directly. Deleting parents requires explicit calls, and associations only delete related data.
+</Accordion>
+</AccordionGroup>
+
+
+## Visualizing Association Operations Flow
+
+```mermaid
+flowchart TD
+  A[Start with Parent Model] --> B[Apply Set(...) with Field Helpers]
+  B --> C{Association Type?}
+
+  subgraph Association Type
+    direction LR
+    C --> HasOne[Has One or Belongs To]
+    C --> HasMany[Has Many]
+    C --> Many2Many[Many2Many]
+    C --> Polymorphic[Polymorphic]
+  end
+
+  HasOne --> D{Operation?}
+  HasMany --> D
+  Many2Many --> D
+  Polymorphic --> D
+
+  subgraph Operation
+    direction LR
+    D --> Create[Create]
+    D --> Update[Update]
+    D --> Unlink[Unlink]
+    D --> Delete[Delete]
+    D --> CreateInBatch[Create In Batch]
+  end
+
+  Create --> E[Insert records and link FK]
+  Update --> F[Update matched associated records]
+  Unlink --> G[Clear FK or delete join rows]
+  Delete --> H[Delete associated records or join rows]
+  CreateInBatch --> E
+
+  E & F & G & H --> I[Execute DB Operation]
+  I --> J[End]
+
+  classDef decision fill:#f96,stroke:#333,stroke-width:2px;
+  class C,D decision;
+```
+
+
+## Summary
+
+Mastering association operations with GORM CLI empowers you to maintain complex relational data safely and efficiently. Using generated field helpers aligned with your Go models and understanding underlying semantics lets you handle linked data confidently—from creation to unlinking and deletion—while leveraging compile-time safety.
+
+---
+
+## Related Documentation
+
+- [Model-Driven Field Helpers](./model-driven-field-helpers) — Learn how field helpers encode basic and association fields.
+- [Working with Associations](../../guides/advanced-patterns/working-with-associations) — Detailed workflows and examples.
+- [Using Type-Safe Query APIs](../../guides/core-workflows/using-type-safe-query-apis) — Combine field helpers with generated query APIs.
+- [Generating Code](../../getting-started/first-steps/generating-code) — How to generate these field helpers.
+- [Template-Based Query DSL](./template-query-dsl) — Customize query methods that work well with associations.
+
+---
+
+Explore these guides to deepen your understanding and master the full power of GORM CLI associations.
