@@ -1,0 +1,239 @@
+---
+title: "Generating Code"
+description: "How to invoke `gorm gen` with example commands. Covers typical input/output options and what to expect from generated files. Visual checklists help ensure successful code generation."
+---
+
+# Generating Code with `gorm gen`
+
+This guide details how to invoke the `gorm gen` command to generate GORM query code from raw SQL interface definitions. You'll learn typical input and output options, understand what files the generator produces, and find visual checklists to validate successful code generation.
+
+---
+
+## 1. Prerequisites & Setup
+
+Before running the generator, ensure you have:
+
+- **Go 1.18+** installed (required for generics support).
+- A valid Go project with your model structs and query interfaces defined.
+- The `gorm` CLI tool installed and available in your terminal (`gorm gen` command should be accessible).
+
+Check your CLI installation with:
+
+```bash
+gorm gen --help
+```
+
+If the help output appears, your environment is ready.
+
+---
+
+## 2. Invoking `gorm gen`
+
+The `gorm gen` command generates type-safe GORM query code from interfaces annotated with raw SQL templates.
+
+### Command usage:
+
+```bash
+gorm gen -i <input path> [-o <output directory>]
+```
+
+- `-i, --input` (required): Path to your Go file or directory containing your interfaces with SQL annotations.
+- `-o, --output` (optional): Directory where generated files will be saved. Defaults to `./g`.
+
+### Example:
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+This scans the `./examples` directory, processes interfaces with SQL comments, and emits generated Go source to `./generated`.
+
+<Tip>
+The input path must include Go files that define interfaces with raw SQL comments following GORM CLI’s template DSL (e.g., SQL queries in interface method comments).
+</Tip>
+
+---
+
+## 3. What Happens During Generation?
+
+1. **Scanning Input**: The generator walks through the provided input path (files or directories).
+2. **Parsing Go AST**: It parses each Go file's Abstract Syntax Tree (AST), extracting:
+   - Interfaces and their methods
+   - Model struct definitions
+   - Package-level generation configuration (`genconfig.Config`)
+3. **Filtering**: Applies include/exclude filters for interfaces or structs if configured.
+4. **Generating Code**: For each relevant interface and struct:
+   - Creates type-safe interface implementations with methods embedding the SQL templates.
+   - Emits model-driven field helpers for easier filter, update, and association operations.
+5. **Formatting**: The output code is formatted with Go imports resolved automatically.
+6. **Writing Files**: Files are saved to the specified output directory, maintaining relative paths.
+
+---
+
+## 4. Typical Inputs
+
+### Interface Example
+
+```go
+// examples/query.go
+package examples
+
+type UserQuery[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateUser(user User, id int) error
+}
+```
+
+### Model Struct Example
+
+```go
+// examples/models/user.go
+package models
+
+type User struct {
+  ID   uint
+  Name string
+  Age  int
+}
+```
+
+---
+
+## 5. Generated Files and Output
+
+- **Query API Files**: Implements each interface as a generic Go type with methods executing the SQL queries.
+- **Field Helper Files**: Generate strongly-typed field helpers for all your structs' fields (e.g., `User.Name`, `User.Age`), enabling expressive filters and updates.
+
+### Output directory structure:
+
+The output path (default `./g`) mirrors your input package layout. For example:
+
+```
+generated/
+└── examples/
+    ├── query.go          # generated interface implementations
+    └── models.go         # generated field helpers for your structs
+```
+
+---
+
+## 6. Step-by-Step Example
+
+### 6.1. Prepare your interface and model files
+
+Place your query interfaces with raw SQL template comments and your model definitions in a directory, e.g., `./examples`.
+
+### 6.2. Run the generator
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+Watch console output for:
+
+- Confirmation of processing each input file
+- Messages like `Generating file ./generated/examples/query.go from ./examples/query.go...`
+
+### 6.3. Verify generated code
+
+- Inspect generated files in output directory.
+- Check for generated interfaces with expected methods.
+- Confirm field helpers appear for model structs.
+
+<Tip>
+If code generation fails, check the CLI error messages carefully. Common problems include missing input files, invalid SQL templates, or missing required return values on interface methods.
+</Tip>
+
+---
+
+## 7. Typical CLI Command Options
+
+| Option           | Description                                   | Default   |
+|------------------|-----------------------------------------------|-----------|
+| `-i`, `--input`  | Input path to Go source files or directory    | (required)|
+| `-o`, `--output` | Output directory for generated code            | `./g`     |
+
+---
+
+## 8. Visual Checklist for Success
+
+Use this checklist to verify key positive outcomes after running `gorm gen`:
+
+- [x] CLI runs without errors and exits normally
+- [x] Output directory contains folders/files matching input package structure
+- [x] Each interface has a corresponding generated Go file with concrete implementations
+- [x] Model structs have generated field helper variables and methods
+- [x] Generated code compiles successfully in your project
+
+---
+
+## 9. Troubleshooting Common Issues
+
+<AccordionGroup title="Troubleshooting Common Code Generation Issues">
+<Accordion title="Missing Required Return Values on Interface Methods">
+Ensure every method with a raw SQL query either returns:
+- Exactly one `error`
+- Or two returns: data and `error` (error must be last)
+
+This is enforced by the generator to produce valid method implementations.
+</Accordion>
+<Accordion title="Input Path Points to Non-Go Files or Missing Files">
+Confirm the `-i` input points to existing `.go` files or directories containing Go files with proper interfaces.
+Generated files are skipped for non-Go files or if an input file contains generated header comments.
+</Accordion>
+<Accordion title="Output Code Fails Compilation After Generation">
+Verify that:  
+- Your interfaces and models use valid Go syntax.  
+- SQL templates in comments are valid and bound to the parameters.
+- Configurations (like `genconfig.Config`) don’t unintentionally exclude required elements.
+</Accordion>
+<Accordion title="Configuration Not Applied as Expected">
+Check `genconfig.Config` declarations for:
+- Proper package-level variable usage
+- Correct include/exclude filter syntax (use glob patterns or explicit type names)
+- Override output directory properly
+
+Defaults are to include all interfaces and structs if no config is provided.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 10. Additional Tips
+
+- Use the `--help` flag for detailed options:
+
+```bash
+gorm gen --help
+```
+
+- Leverage `genconfig.Config` in your packages for granular tuning, such as including/excluding specific interfaces or adjusting output paths.
+- SQL template DSL supports powerful features like `@@table`, `@@column`, `{{where}}`, and `{{set}}` for dynamic queries.
+- Generated field helpers facilitate expressive, type-safe predicates and association management in your GORM queries.
+
+---
+
+## 11. Next Steps
+
+- Proceed to [Defining Your Models and Query Interfaces](/getting-started/your-first-generation/writing-models-interfaces) to structure your input code correctly.
+- Follow [Using Generated APIs](/getting-started/your-first-generation/using-generated-apis) to incorporate the generated code into your runtime logic.
+- Explore [Optional Configuration](/getting-started/configuration-and-troubleshooting/basic-configuration) for customizing generation.
+
+---
+
+## 12. References
+
+- Official source for generator code: [generator.go](https://github.com/go-gorm/cli/blob/main/internal/gen/generator.go)
+- Command implementation and flags: [gen.go](https://github.com/go-gorm/cli/blob/main/internal/gen/gen.go)
+- Template for generated code: [template.go](https://github.com/go-gorm/cli/blob/main/internal/gen/template.go)
+- Example usage in README: [README.md](https://github.com/go-gorm/cli/blob/main/README.md)
+
+---
