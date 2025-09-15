@@ -1,0 +1,258 @@
+---
+title: "Your First Code Generation"
+description: "Step through writing a query interface and model struct, running the CLI to generate type-safe APIs, and understanding where the generated code lives. Validate your success with a simple example."
+---
+
+# Your First Code Generation
+
+Step confidently from defining your SQL-driven query interfaces and model structs to running the GORM CLI for code generation. This guide walks you through writing your first annotated interfaces and models, running the CLI command to generate type-safe APIs, and understanding where to find and how to validate the generated code with a simple example.
+
+---
+
+## 1. Define Your Query Interface and Model Struct
+
+Your first task is to author Go interfaces with SQL templates embedded in comments and define your model structs. This forms the source input the CLI uses to generate concrete, type-safe database query APIs and model-driven field helpers.
+
+### Sample Query Interface
+
+Create an interface that uses raw SQL or template directives in the method comments. Example:
+
+```go
+// examples/query.go
+package examples
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateInfo(user User, id int) error
+}
+```
+
+- Use `@@table` to represent your model’s table.
+- Use `@param` syntax to bind method parameters to SQL placeholders.
+- Use `{{where}}`, `{{set}}`, and other supported template DSL directives for dynamic SQL.
+
+### Model Struct Example
+
+Define your models adjacent or in the same package. For example:
+
+```go
+// examples/models/user.go
+package models
+
+type User struct {
+  ID   uint
+  Name string
+  Age  int
+}
+```
+
+Your generated code will include field helpers based on the struct fields, enabling fluent query and update building.
+
+<Tip>
+Keep your interface and model definitions in the same directory or package to simplify CLI input path specification.
+</Tip>
+
+---
+
+## 2. Running the CLI for Code Generation
+
+With interface and model code in place, you run the GORM CLI tool to generate the APIs.
+
+### Prerequisites
+
+- You have Go 1.18+ installed.
+- Your CLI is installed via:
+
+```bash
+go install gorm.io/cli/gorm@latest
+```
+
+### Run the `gen` Command
+
+Open your terminal and run:
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+Arguments explained:
+
+- `-i ./examples` points to the directory containing your interfaces and models (can also be a file).
+- `-o ./generated` specifies where generated code files will be saved.
+
+### What Happens During Generation
+
+- The CLI parses all Go files under the input path.
+- It extracts annotated interfaces and models.
+- It generates type-safe query API implementations and field helper structs.
+- Generated files mirror your input directory structure inside the output directory.
+
+### Verifying Generation Success
+
+You should see output like:
+
+```plaintext
+Generating file ./generated/query.go from ./examples/query.go...
+Generating file ./generated/models/user.go from ./examples/models/user.go...
+```
+
+If no errors appear and files are created, your generation succeeded.
+
+<Warning>
+If you receive errors on method signatures or SQL templates, ensure your interface method return values conform to expectations (e.g., last return is `error`, max two returns, SQL templates present for query methods).
+</Warning>
+
+---
+
+## 3. Locating and Understanding Generated Code
+
+After generation, your output folder (`./generated` in the example) contains Go files with your generated APIs.
+
+### Generated Query Interface Code
+
+- For each interface, a matching struct implementing it will be created.
+- Functions to instantiate a query interface with a GORM `*gorm.DB` dependency.
+- Methods with concrete SQL implementations based on your templates.
+
+Example snippet:
+
+```go
+func Query[T any](db *gorm.DB, opts ...clause.Expression) _QueryInterface[T] {
+  return _QueryImpl[T]{
+    Interface: gorm.G[T](db, opts...),
+  }
+}
+
+func (e _QueryImpl[T]) GetByID(ctx context.Context, id int) (T, error) {
+  // SQL: SELECT * FROM @@table WHERE id=@id
+  return e.Exec(ctx, sb.String(), params...)
+}
+```
+
+### Generated Model Field Helpers
+
+For each struct, a variable struct with typed fields is created for building queries conveniently.
+
+Example:
+
+```go
+var User = struct {
+  ID   field.Number[uint]
+  Name field.String
+  Age  field.Number[int]
+}{
+  ID:   field.Number[uint]{}.WithColumn("id"),
+  Name: field.String{}.WithColumn("name"),
+  Age:  field.Number[int]{}.WithColumn("age"),
+}
+```
+
+These fields enable fluent predicates like `User.Age.Gt(18)`.
+
+<Note>
+Generated files include the boilerplate note `// Code generated by 'gorm.io/cli/gorm'. DO NOT EDIT.` to prevent manual modifications.
+</Note>
+
+---
+
+## 4. Validating and Using the Generated APIs
+
+You now have full type-safe query APIs and field helpers ready to use in your application.
+
+### Simple Usage Example
+
+```go
+package main
+
+import (
+  "context"
+  "fmt"
+  "gorm.io/gorm"
+  "generated" // your generated package
+  "models"    // your models package
+)
+
+func main() {
+  db := setupDB() // initialize your *gorm.DB
+  ctx := context.Background()
+
+  // Query user by ID
+  user, err := generated.Query[models.User](db).GetByID(ctx, 123)
+  if err != nil {
+    panic(err)
+  }
+  fmt.Println("User:", user)
+
+  // Find users where Age > 18
+  users, err := generated.User.Where(generated.User.Age.Gt(18)).Find(ctx)
+  if err != nil {
+    panic(err)
+  }
+  fmt.Println("Adult users:", users)
+}
+```
+
+<Tip>
+Your first successful API call validates that both the generated interface implementations and field helpers work correctly.
+</Tip>
+
+<Warning>
+If you get method not found errors, double-check that you imported the generated package and that your input interfaces had correct SQL templates.
+</Warning>
+
+---
+
+## Troubleshooting Common Issues
+
+- **No generated files:**
+  - Verify your input files contain interfaces with at least one annotated method.
+  - Check CLI `-i` path points exactly to your source files.
+
+- **Method signature errors:**
+  - Read CLI error messages carefully: methods must return `(data, error)` or just `error`.
+  - Ensure your last return is always an `error`.
+
+- **SQL template parsing problems:**
+  - Verify your SQL comments use valid placeholders (`@@table`, `@param`) and balanced template directives (`{{if}}...{{end}}`).
+
+- **Generated code formatting errors:**
+  - The generator runs `goimports` automatically; if formatting fails, ensure Go environment is set up correctly.
+
+- **Output directory not writable:**
+  - Confirm you have write permissions to the specified output path.
+
+---
+
+## Next Steps & Additional Resources
+
+- Explore [Basic Configuration](/getting-started/first-steps/initial-configuration) to customize output paths and mappings.
+- See [Validating and Using Generated APIs](/getting-started/first-steps/validating-usage) for more advanced usage patterns.
+- Review the [Feature Overview at a Glance](/overview/features-and-integration/feature-tour) for broader GORM CLI capabilities.
+
+---
+
+By following this guide, you will have set up the foundation for fluent, type-safe, and maintainable Go database access powered by GORM CLI.
+
+
+---
+
+## References
+
+- [GORM CLI - Official GitHub](https://github.com/go-gorm/cli)
+- [Configuration & Customization Essentials](https://gorm.io/docs/your-first-configuration.html)
+- [Troubleshooting Installation & Setup](https://gorm.io/docs/troubleshooting-install.html)
+
+---
+
+Enjoy your generated, type-safe database code!
