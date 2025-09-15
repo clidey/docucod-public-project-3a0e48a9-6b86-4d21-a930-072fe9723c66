@@ -1,0 +1,288 @@
+---
+title: "Using Generated Field Helpers"
+description: "Discover how to effectively use the strongly typed field helpers generated from your model structs for building filters, performing updates, setting associations, and handling null values cleanly. Includes practical code samples for everyday CRUD operations."
+---
+
+# Using Generated Field Helpers
+
+Unlock the power of strongly typed field helpers generated from your Go model structs to build precise filters, perform updates, manage associations, and handle null values elegantly. This guide walks you through practical, everyday CRUD operations leveraging these helpers to make your database interactions type-safe, fluent, and expressive.
+
+---
+
+## Workflow Overview
+
+### What This Guide Helps You Accomplish
+This guide empowers you to use the GORM CLI-generated field helpers effectively, focusing on:
+- Writing filters and conditionals using strongly typed predicates
+- Performing updates with explicit and expression-based setters
+- Creating new records using the helper-based assignments
+- Managing associations (one-to-one, one-to-many, many-to-many) through association helpers
+- Handling nullable fields cleanly and safely
+
+### Prerequisites
+- A Go project where GORM CLI has generated field helpers from your model structs
+- Familiarity with basic GORM usage and context-aware database operations
+- A working database connection wrapped by a `*gorm.DB` instance
+
+### Expected Outcome
+By completing the workflows and examples in this guide, you will:
+- Confidently construct filter expressions using generated predicates
+- Perform granular updates, including zero values and SQL expressions
+- Create records with complex nested associations in a type-safe manner
+- Understand how to unlink, update, and delete associated records via helpers
+- Use nullable fields and custom field types without error-prone manual handling
+
+### Time Estimate
+15–30 minutes to master the basics and implement common CRUD scenarios using generated helpers.
+
+### Difficulty Level
+Intermediate – assumes basic understanding of Go, GORM, and generics.
+
+---
+
+## Step-by-Step Instructions
+
+### 1. Filtering with Generated Field Helpers
+Use generated fields to build clear, type-safe filter predicates in your queries.
+
+#### Steps:
+1. Identify the generated field helper for your model.
+   - Example: `generated.User.Age` for the `Age` field on the `User` struct.
+2. Use provided predicate methods for conditions.
+   - Examples: `.Eq(value)`, `.Gt(value)`, `.IsNull()`, `.Like(pattern)`
+3. Chain multiple predicates within `Where(...)` to combine conditions.
+
+#### Sample code:
+```go
+var users []models.User
+err := gorm.G[models.User](db).
+    Where(
+        generated.User.Age.Gt(18),         // age > 18
+        generated.User.Role.Eq("active"), // role = 'active'
+    ).
+    Find(ctx, &users)
+```
+#### Success Criteria
+You obtain a slice of users satisfying the combined conditions.
+
+---
+
+### 2. Updating Records Using Helpers
+Perform updates cleanly with `Set()` assignments, supporting zero values and SQL expressions.
+
+#### Steps:
+1. Use `Where(...)` with field helpers to identify records to update.
+2. Call `Set(...)` supplying field assignments.
+   - Use `.Set(value)` for direct assignments.
+   - Use `.SetExpr(clause.Expr)` or `.Incr(n)` for SQL expressions or increments.
+3. Execute `.Update(ctx)` to apply the changes.
+
+#### Example: Update "pending" users to "active"
+```go
+rows, err := gorm.G[models.User](db).
+    Where(generated.User.Role.Eq("pending")).
+    Set(generated.User.Role.Set("active")).
+    Update(ctx)
+```
+
+#### Example: Increment age using `Incr`
+```go
+rows, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(generated.User.Age.Incr(3)).
+    Update(ctx)
+```
+
+#### Verification
+Check the number of rows affected matches expectations, and verify field updates by querying.
+
+---
+
+### 3. Creating Records with Field Helpers
+Create records by setting field values explicitly with `Set(...)`. This includes nullable fields.
+
+#### Steps:
+1. Use `gorm.G[ModelType](db).Set(...)` passing assignments per field.
+2. For nullable or special fields, supply Go zero values or sql.Null* types.
+3. Call `.Create(ctx)` to insert the new record.
+
+#### Example: Create a user with nullable score
+```go
+err := gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("set_user"),
+        generated.User.Age.Set(29),
+        generated.User.Role.Set("active"),
+        generated.User.IsAdult.Set(true),
+        generated.User.Score.Set(sql.NullInt64{Int64: 99, Valid: true}),
+    ).
+    Create(ctx)
+```
+#### Validation
+After creation, query the user by unique field (e.g., name) and verify all values, including nullable ones, are correctly persisted.
+
+---
+
+### 4. Managing Associations with Helpers
+Use association helpers for operations on related models (has one, has many, belongs to, many2many).
+
+#### Available association operations:
+- `Create` and `CreateInBatch` to insert and associate child records
+- `Update` to modify associated records using optional conditions
+- `Unlink` to clear association links without deleting related records
+- `Delete` to remove associated records (or join rows in many2many)
+
+#### Steps:&ensp;
+1. Access association helper fields on the generated struct, e.g., `generated.User.Pets`.
+2. Use `.Create(...)` or `.CreateInBatch(...)` to create and link new associated records.
+3. Use `.Where(...).Update(...)` to update filtered associated records.
+4. Use `.Unlink()` or `.Delete()` optionally with `.Where(...)` to remove links or records.
+5. Combine association operations inside `Set(...)` when creating or updating parent records.
+
+#### Example: Create a user and one pet
+```go
+gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+    ).
+    Create(ctx)
+```
+
+#### Example: Update a user's pet with name = 'fido'
+```go
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+        Update(generated.Pet.Name.Set("rex")),
+    ).
+    Update(ctx)
+```
+
+#### Unlink vs Delete semantics
+- `Unlink()`: removes association links (e.g., sets FK to NULL or deletes join rows).
+- `Delete()`: deletes associated records (or join rows for many2many).
+
+#### Usage Note
+These must be composed inside `Set(...)` followed by `.Update(ctx)` or `.Create(ctx)` on the parent model.
+
+---
+
+### 5. Handling Null Values Cleanly
+The generated field helpers support nullable fields via Go types like `sql.NullInt64` and `sql.NullTime`.
+
+#### Usage Tips
+- Use `.IsNull()` and `.IsNotNull()` predicates to filter null states.
+- Assign zero-valued nullable types like `sql.NullInt64{}` to explicitly set NULL in updates.
+- Specify valid values with `sql.NullInt64{Int64: val, Valid: true}` to store non-NULL.
+
+#### Example: Query users with LastLogin IS NULL
+```go
+count, err := gorm.G[models.User](db).
+    Where(generated.User.LastLogin.IsNull()).
+    Count(ctx, "*")
+```
+
+#### Zero value update example
+```go
+rows, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("alice")).
+    Set(
+        generated.User.Score.Set(sql.NullInt64{}), // sets Score to NULL
+    ).
+    Update(ctx)
+```
+
+---
+
+## Practical Examples & Scenarios
+
+### Filtering with Multiple Conditions
+```go
+var usersOver18Active []models.User
+if err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+    Scan(ctx, &usersOver18Active); err != nil {
+    // handle error
+}
+```
+
+### Updating with Set Assignments
+Increment age by 1 for user named "bob":
+```go
+rows, err := gorm.G[models.User](db).
+    Where(generated.User.Name.Eq("bob")).
+    Set(generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{1}})).
+    Update(ctx)
+```
+
+### Creating with Nullable Fields
+```go
+err := gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("set_user"),
+        generated.User.Score.Set(sql.NullInt64{Int64: 99, Valid: true}),
+    ).
+    Create(ctx)
+```
+
+### Association Update with Filter
+Change pet name "fido" to "rex" for user with ID 1:
+```go
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).
+        Update(generated.Pet.Name.Set("rex")),
+    ).
+    Update(ctx)
+```
+
+### Unlink and Delete Associations
+```go
+// Unlink all pets for user 1
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Unlink()).
+    Update(ctx)
+
+// Delete pets named 'old' for user 1
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete()).
+    Update(ctx)
+```
+
+---
+
+## Troubleshooting & Best Practices
+
+### Common Issues
+- **Zero values not updating:** Ensure you use `.Set()` with zero values explicitly instead of omitting.
+- **Nullable fields mismanaged:** Use `sql.Null*` types consistently for nullable DB columns.
+- **Association methods not working:** Verify you're calling association operations within `Set(...).Update(ctx)` or `Set(...).Create(ctx)` chain.
+- **Queries returning empty results:** Confirm filter predicates match DB column names and data; use `.IsNull()` predicates when needed.
+
+### Tips for Best Results
+- Always use generated helpers instead of raw strings for column names; this prevents typos and enhances compilation safety.
+- Combine multiple conditions with `Where(...)` using field helpers for clean queries.
+- Use `SetExpr` and `Incr` for SQL expressions to avoid race conditions in concurrent updates.
+- When managing associations, use `.Where(...)` on the association helper to target specific records.
+- Use `.CreateInBatch()` for efficiently inserting multiple associated records.
+
+---
+
+## Next Steps & Related Content
+
+- **Generate Type-Safe Code:** Learn how to run the generator to produce these helpers. ([Generate Type-Safe Code](/getting-started/first-steps/generate-code))
+- **Quickstart Complete Workflow:** See the end-to-end recipe for defining models and queries with GORM CLI. ([Quickstart: Generating Type-Safe APIs](/guides/getting-started-workflows/quickstart-complete-workflow))
+- **Working with Associations:** Deep dive into complex association management and semantics. ([Managing Associations and Relationships](/guides/advanced-usage-patterns/working-with-associations))
+- **Template-Based SQL Queries:** Discover how to write flexible queries using SQL templating with GORM CLI. ([Template-Based SQL Queries](/guides/advanced-usage-patterns/template-queries))
+
+---
+
+## Summary
+Using the generated field helpers dramatically improves the safety and expressivity of your database operations in Go projects that use GORM CLI. From typed filters to complex association handling, the helpers provide a fluent API shape that reduces runtime errors and clarifies your intent.
+
+Apply the examples and tips in this guide to empower your CRUD operations, manage linked records seamlessly, and handle nullable data correctly. Combine this knowledge with configuration customization and template queries to master GORM CLI in your codebase.
+
+---
