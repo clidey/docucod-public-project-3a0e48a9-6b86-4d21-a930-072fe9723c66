@@ -1,0 +1,254 @@
+---
+title: "Model and Field Mapping"
+description: "Learn how GORM CLI translates your Go structs and fields into queryable entities with rich helper methods. Understand supported field types, basic and advanced mapping via config, and custom field helpers like JSON."
+---
+
+# Model and Field Mapping
+
+Explore how GORM CLI transforms your Go structs and fields into expressive, type-safe queryable entities enriched with powerful helper methods. This page guides you through the supported field types, how basic and advanced field mappings work, and the customization capabilities offered by custom field helpers such as JSON.
+
+---
+
+## Understanding Model and Field Mapping
+
+At the core of GORM CLI's value is its ability to generate _field helpers_ from your Go model structs. These helpers empower you to write safe, fluent, and discoverable queries and updates by abstracting raw SQL into type-safe Go code.
+
+This page focuses exclusively on the mapping between your Go struct fields and the generated field helpers, explaining:
+
+- Supported core field types
+- How the generator infers field helper types
+- Configurable mappings for fine-tuned control
+- Using custom field helpers, exemplified by JSON
+
+
+## 1. Supported Basic Field Types
+
+GORM CLI recognizes and supports a wide range of Go types out of the box. When you define a model struct, the generator automatically creates corresponding field helpers for each exported field, enabling you to construct predicates and set values fluently.
+
+### Core Supported Types
+
+| Go Type             | Generated Field Helper               | Description                         |
+|---------------------|------------------------------------|-----------------------------------|
+| `int`, `int8..64`   | `field.Number[int]` (generic by int) | Numeric comparison and updates    |
+| `float32`, `float64`| `field.Number[float]`               | Numeric predicates and increments |
+| `string`            | `field.String`                     | String operations (equal, like)   |
+| `bool`              | `field.Bool`                       | Boolean predicates and updates    |
+| `time.Time`         | `field.Time`                       | Date/time comparisons and filters |
+| `[]byte`            | `field.Bytes`                      | Binary data filters                |
+| Nullable types      | `field.Field[sql.Null*]`           | SQL Nullable types (checker methods) |
+
+### Model Field Example
+
+```go
+ type User struct {
+   ID        uint
+   Name      string
+   Email     string
+   Age       int
+   Status    string
+   CreatedAt time.Time
+}
+```
+
+The generator produces helpers such as:
+
+```go
+generated.User.ID.Eq(1)               // id = 1
+generated.User.Name.Like("%jinzhu%") // name LIKE '%jinzhu%'
+generated.User.Age.Between(18, 65)   // age BETWEEN 18 AND 65
+```
+
+
+## 2. How Basic Field Mapping Works
+
+When processing your model structs, GORM CLI generates a variable named after the struct (e.g., `User`) containing fields reflecting each struct attribute. Each field is assigned a typed helper based on the Go type.
+
+The field helpers expose predicates for querying (`Eq`, `Lt`, `Gt`, `Like`, `IsNull`, etc.) and setters for updates such as `Set()`, `Incr()`, and `SetExpr()`.
+
+### Field Type Inference Logic
+
+- Recognized primitive types map to dedicated handlers (`field.String`, `field.Time`, `field.Bool`, etc.).
+- Numeric types use a generic `field.Number[T]` helper.
+- SQL Null types (`sql.NullInt64`, `sql.NullString`) generate generic `field.Field[sql.Null*]` helpers.
+- Pointer and slice types that represent associations or JSON derive specialized helpers (`field.Struct[T]`, `field.Slice[T]`).
+
+This transparent mapping ensures you can directly work with your models without additional boilerplate.
+
+
+## 3. Advanced Mapping via Configuration
+
+While the default inference covers common use cases, GORM CLI provides a powerful configuration mechanism for customized field helper generation.
+
+### Using `genconfig.Config`
+
+Define a package-level `genconfig.Config` variable to:
+
+- Override output directory
+- Map Go types to custom field helpers
+- Map field names via `gen` tags to specific helpers
+- Filter which structs or interfaces are included in generation
+
+#### Example Configuring Field Type and Name Mappings
+
+```go
+var _ = genconfig.Config{
+  OutPath: "examples/output",
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},    // Treat sql.NullTime as field.Time
+  },
+  FieldNameMap: map[string]any{
+    "date": field.Time{},           // Fields tagged with gen:"date" use Time helper
+    "json": JSON{},                 // Fields tagged with gen:"json" use custom JSON helper
+  },
+}
+```
+
+#### Applying Field Name Tags Example
+
+```go
+// Model field with gen tag specifies custom helper
+Profile string `gen:"json"`
+```
+
+This enables targeted, fine-grained control for specialized field handling where needed.
+
+
+## 4. Custom Field Helpers: The JSON Case Study
+
+GORM CLI supports extensibility through custom field helpers. A prime example is handling JSON columns differently across SQL dialects.
+
+### Why Custom Helpers?
+
+Field helpers generate SQL fragments for predicates and updates, but JSON fields require different SQL depending on the database:
+
+- MySQL uses `JSON_EXTRACT` with casting
+- SQLite validates JSON with `json_valid` and uses `json_extract`
+- PostgreSQL uses JSONB functions
+
+### Declaring a JSON Custom Helper
+
+Implement your own struct with methods accepting SQL column info and building dialect-specific SQL expressions.
+
+```go
+// JSON is a field helper for JSON columns
+// It generates SQL specific to each supported database
+
+type JSON struct { column clause.Column }
+
+func (j JSON) WithColumn(name string) JSON {
+    c := j.column
+    c.Name = name
+    return JSON{column: c}
+}
+
+func (j JSON) Equal(path string, value any) clause.Expression {
+    return jsonEqualExpr{col: j.column, path: path, val: value}
+}
+
+// jsonEqualExpr builds the SQL for JSON equality
+func (e jsonEqualExpr) Build(builder clause.Builder) {
+    if stmt, ok := builder.(*gorm.Statement); ok {
+        switch stmt.Dialector.Name() {
+        case "mysql":
+            v, _ := json.Marshal(e.val)
+            clause.Expr{
+                SQL:  "JSON_EXTRACT(?, ?) = CAST(? AS JSON)",
+                Vars: []any{e.col, e.path, string(v)},
+            }.Build(builder)
+        case "sqlite":
+            clause.Expr{
+                SQL:  "json_valid(?) AND json_extract(?, ?) = ?",
+                Vars: []any{e.col, e.col, e.path, e.val},
+            }.Build(builder)
+        default: // postgres and others
+            clause.Expr{
+                SQL:  "jsonb_extract_path_text(?, ?) = ?",
+                Vars: []any{e.col, e.path[2:], e.val},
+            }.Build(builder)
+        }
+    }
+}
+```
+
+### Using JSON Helper in Queries
+
+Declare a configuration pointing fields tagged with `gen:"json"` to use your custom JSON helper.
+
+```go
+var _ = genconfig.Config{
+  FieldNameMap: map[string]any{
+    "json": JSON{},
+  },
+}
+```
+
+In models:
+
+```go
+type User struct {
+  Profile string `gen:"json"`
+}
+```
+
+Example query:
+
+```go
+gorm.G[User](db).
+  Where(generated.User.Profile.Equal("$.vip", true)).
+  Take(ctx)
+```
+
+This generates dialect-appropriate SQL:
+
+- MySQL:
+
+  ```sql
+  JSON_EXTRACT(`profile`, "$.vip") = CAST("true" AS JSON)
+  ```
+
+- SQLite:
+  ```sql
+  json_valid(`profile`) AND json_extract(`profile`, "$.vip") = 1
+  ```
+
+
+## 5. Summary of Field Helper Generation Workflow
+
+1. **Parse Go structs:** The generator inspects exported fields of structs.
+2. **Field type inference:** It maps Go types to built-in or configured helper types.
+3. **Tag and config overrides:** Override behavior with `gen` struct tags or `genconfig.Config`.
+4. **Generate a per-model variable** holding typed field helpers, each exposing predicates and setters.
+
+## 6. Practical Tips & Best Practices
+
+- Annotate only exported fields to ensure helper generation.
+- Use `genconfig.Config` to centralize your mappings across packages.
+- Employ custom helpers to handle complex types requiring SQL dialect differentiation.
+- Validate field names and configurations especially when working with custom tags.
+
+## 7. Troubleshooting Common Issues
+
+<AccordionGroup title="Common Field Mapping Issues and Solutions">
+<Accordion title="Field Helper Type Not Matching Expectations">
+Verify that your `genconfig.Config` correctly maps either the Go type or the field name tag. Remember that `FieldTypeMap` targets Go types directly, while `FieldNameMap` applies when the field has a matching `gen` tag.
+</Accordion>
+<Accordion title="Custom Field Helper Not Used in Generated Code">
+Ensure that your package-level config variable is in the same package as the models or interfaces being generated. Also, confirm that mapping keys exactly match the `gen` tag string.
+</Accordion>
+<Accordion title="JSON Field Queries Not Working Across Databases">
+Check your custom JSON helper implements correct dialect detection and SQL expressions as per database requirements. Test generated SQL by logging or debugging GORM statements.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Additional Resources
+
+- [Preparing Models & Query Interfaces](https://yourdocsite/getting-started/first-codegen-workflow/prepare-models-interfaces) – How to structure Go models for generation.
+- [Custom Field Helpers and JSON Mapping](https://yourdocsite/guides/advanced-patterns/custom-fields) – Comprehensive guide on creating and using custom helpers.
+- [Using the Generated Code](https://yourdocsite/getting-started/first-codegen-workflow/using-generated-code) – Practical examples on exploiting generated field helpers.
+- [Core System Components](https://yourdocsite/concepts/architecture-overview/system-components) – Insight into GORM CLI internals related to generation.
+
+---
+
+By mastering model and field mapping concepts, you unlock the full potential of GORM CLI’s type-safe querying and fluent API generation, making database interactions in Go safer and more productive.
