@@ -1,0 +1,332 @@
+---
+title: "Field Helpers: Filters and Updates"
+description: "Explore how the generated field helpers empower you to build expressive, type-safe queries for filtering, updating, and ordering data. Includes practical examples for working with common field types and composing complex update operations."
+---
+
+# Field Helpers: Filters and Updates
+
+Explore how the generated field helpers empower you to build expressive, type-safe queries for filtering, updating, and ordering data. Includes practical examples for working with common field types and composing complex update operations.
+
+---
+
+## 1. Overview
+
+### Purpose
+This page explains how to use **field helpers** generated from your Go model structs to construct fluent, type-safe queries and updates with GORM CLI. You will learn to apply these helpers for filtering records, setting updates, managing zero values, expressions, and composing complex conditions.
+
+### Prerequisites
+- You have generated code from your model structs using GORM CLI.
+- Familiarity with using GORM and basic Go programming.
+
+### Outcome
+By the end of this guide, you will be able to:
+- Build filter (WHERE) queries using field helpers.
+- Perform update operations with zero-valued fields and SQL expressions.
+- Use helper methods to increment/decrement numeric fields.
+- Combine multiple conditions and updates in a concise, type-safe manner.
+
+### Time Estimate
+Approximately 10–15 minutes.
+
+### Difficulty Level
+Beginner to Intermediate.
+
+---
+
+## 2. Understanding Field Helpers
+
+Field helpers are generated Go variables based on your model fields. They represent typed predicates and setters for each column, enabling you to create expressive queries with compile-time validation.
+
+For example, if your model has a field:
+
+```go
+Name string
+Age  int
+IsAdult bool
+```
+
+The generator creates:
+
+```go
+var User = struct {
+  Name    field.String
+  Age     field.Number[int]
+  IsAdult field.Bool
+}{
+  Name:    field.String{}.WithColumn("name"),
+  Age:     field.Number[int]{}.WithColumn("age"),
+  IsAdult: field.Bool{}.WithColumn("is_adult"),
+}
+```
+
+You use these helpers to build predicates such as `.Eq(value)`, `.Gt(value)`, `.IsNull()`, and setters like `.Set(value)` or `.SetExpr(expr)`.
+
+---
+
+## 3. Filtering Records Using Field Helpers
+
+Use field helpers within GORM's `Where()`, `Find()`, or `Scan()` clauses to filter query results.
+
+### 3.1 Basic Filtering
+
+```go
+// Find users age > 18 and role = "active"
+var users []User
+err := gorm.G[User](db).
+  Where(
+    generated.User.Age.Gt(18),
+    generated.User.Role.Eq("active"),
+  ).
+  Find(ctx, &users)
+```
+
+### 3.2 Null Checks
+
+You can check for NULL values explicitly:
+
+```go
+// Find users with no last login timestamp
+users, err := gorm.G[User](db).
+  Where(generated.User.LastLogin.IsNull()).
+  Find(ctx)
+```
+
+### 3.3 Combining Filters
+
+Field helpers can be combined with standard GORM conditions:
+
+```go
+users, err := gorm.G[User](db).
+  Where(generated.User.Age.Gte(21)).
+  Where("created_at > ?", time.Now().AddDate(-1, 0, 0)).
+  Find(ctx)
+```
+
+---
+
+## 4. Updating Records with Field Helpers
+
+Field helpers provide a convenient way to define update assignments safely and expressively.
+
+### 4.1 Basic Update Using Set
+
+```go
+// Set role to "active" where role is "pending"
+rows, err := gorm.G[User](db).
+  Where(generated.User.Role.Eq("pending")).
+  Set(
+    generated.User.Role.Set("active"),
+  ).
+  Update(ctx)
+```
+
+### 4.2 Creating Records with Set Assignments
+
+```go
+// Create a new user with specified fields
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("new_user"),
+    generated.User.Age.Set(30),
+    generated.User.IsAdult.Set(true),
+  ).
+  Create(ctx)
+```
+
+### 4.3 Updates with Zero Values
+
+You can explicitly set fields to their zero values (e.g., empty string, false, or NULL):
+
+```go
+// Update records setting zero values explicitly
+_, err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("alice")).
+  Set(
+    generated.User.Age.Set(0),          // zero int
+    generated.User.IsAdult.Set(false),  // zero bool
+    generated.User.Role.Set(""),      // zero string
+    generated.User.Score.Set(sql.NullInt64{}), // NULL
+  ).
+  Update(ctx)
+```
+
+### 4.4 Using SQL Expressions
+
+Use `.SetExpr()` to apply SQL-level expressions in updates:
+
+```go
+// Increment age by 1
+rows, err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(
+    generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{1}}),
+  ).
+  Update(ctx)
+```
+
+### 4.5 Incrementing and Decrementing Fields
+
+For numeric fields, field helpers provide `.Incr()` and `.Decr()` for common arithmetic updates:
+
+```go
+// Increment age by 3
+rows, err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(
+    generated.User.Age.Incr(3),
+  ).
+  Update(ctx)
+```
+
+### 4.6 Combining Multiple Updates
+
+You may mix zero-value, expression, and normal value updates:
+
+```go
+_, err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("cathy")).
+  Set(
+    generated.User.Role.Set(""),
+    generated.User.IsAdult.Set(false),
+    generated.User.Score.Set(sql.NullInt64{}),
+    generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{2}}),
+  ).
+  Update(ctx)
+```
+
+---
+
+## 5. Real-World Examples
+
+### 5.1 Filtering Active Users Over Age 18
+
+```go
+var activeAdultUsers []models.User
+err := gorm.G[models.User](db).
+  Where(
+    generated.User.Age.Gt(18),
+    generated.User.Role.Eq("active"),
+  ).
+  Find(ctx, &activeAdultUsers)
+```
+
+### 5.2 Updating User Role and Status
+
+```go
+// Change all pending users to active
+rowsUpdated, err := gorm.G[models.User](db).
+  Where(generated.User.Role.Eq("pending")).
+  Set(
+    generated.User.Role.Set("active"),
+  ).
+  Update(ctx)
+```
+
+### 5.3 Creating a User With Profile and Score
+
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("set_user"),
+    generated.User.Age.Set(29),
+    generated.User.Role.Set("active"),
+    generated.User.IsAdult.Set(true),
+    generated.User.Score.Set(sql.NullInt64{Int64: 99, Valid: true}),
+  ).
+  Create(ctx)
+```
+
+### 5.4 Incrementing Age with SetExpr
+
+```go
+_, err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(
+    generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{1}}),
+  ).
+  Update(ctx)
+```
+
+---
+
+## 6. Best Practices & Tips
+
+- **Explicit Zero Values:** When updating, use `.Set(zeroValue)` for fields you want to clear or reset even if that value matches the Go zero value.
+- **Use SetExpr for Complex Expressions:** Use `.SetExpr()` to execute SQL expressions or calculations directly within the update.
+- **Combine Conditions Clearly:** Combine multiple field helpers within `Where()` for multi-conditional filtering.
+- **Match Field Types:** Rely on the generated field helpers to match your model’s types—avoid manually writing column names to prevent typos.
+- **Updating Multiple Fields:** Compose multiple `.Set()` helpers in the same call to update several fields atomically.
+- **Context-aware Calls:** Always pass a context (`ctx`) to your operations for proper cancellation and tracing.
+
+---
+
+## 7. Troubleshooting
+
+<AccordionGroup title="Common Issues and Solutions">
+<Accordion title="Filtering Returns No Results">
+- Verify that your field helper predicates match the data (e.g., use `.Eq()` with correct values).
+- Check if values are zero-valued unintentionally, which might filter out all results.
+- Ensure the database connection and context are correct.
+</Accordion>
+<Accordion title="Update Does Not Affect Any Rows">
+- Confirm your `Where()` predicate accurately targets the intended rows.
+- Remember `.Set()` only updates specified fields; missing `Set` will not alter data.
+- Check for database constraints or triggers that might prevent updates.
+</Accordion>
+<Accordion title="Zero Values Not Persisting in Updates">
+- Use `.Set(zeroValue)` explicitly for zero-values; do not omit zero-values expecting automatic update.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 8. Next Steps & Related Guides
+
+- [Working with Associations](/guides/using-generated-apis/working-with-associations): Manage relations using association helpers.
+- [Template-Driven Queries & SQL Templates](/guides/using-generated-apis/template-based-queries): Customize queries using raw SQL templates.
+- [Using the Generated APIs](/getting-started/first-usage-configuration/using-generated-code): Broader usage of generated APIs beyond field helpers.
+- [Core Concepts & Terminology](/overview/intro-product-value-core-concepts/core-terminology-and-concepts): Deep dive into GORM CLI concepts.
+- [Quickstart: Code Generation Workflow](/guides/getting-started/quickstart-code-generation): From interface to running queries with the CLI.
+
+---
+
+## 9. Additional Resources
+
+- Official [GORM CLI GitHub repository](https://github.com/go-gorm/cli)
+- Generated code examples in `examples/output` folder
+
+---
+
+With these field helpers, your queries and updates become safer, more expressive, and easy to maintain. Use these tools to elevate your database handling with GORM CLI.
+
+---
+
+# Reference: Generated Field Helper Usage
+
+```go
+// Filtering with helpers
+users, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+  Find(ctx)
+
+// Updating with helpers
+_, err = gorm.G[models.User](db).
+  Where(generated.User.Role.Eq("pending")).
+  Set(generated.User.Role.Set("active")).
+  Update(ctx)
+
+// Creating a new user with Set assignments
+err = gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Age.Set(28),
+    generated.User.IsAdult.Set(true),
+  ).
+  Create(ctx)
+
+// Increment age by 1
+_, err = gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("bob")).
+  Set(generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{1}})).
+  Update(ctx)
+```

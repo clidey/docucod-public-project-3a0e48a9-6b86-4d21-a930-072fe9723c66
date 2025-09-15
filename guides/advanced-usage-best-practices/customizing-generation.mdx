@@ -1,0 +1,244 @@
+---
+title: "Customizing Generation with genconfig.Config"
+description: "Learn to tailor the code generator to your project's unique requirements using genconfig.Config. Control output paths, field mappings, inclusion/exclusion rules, and package-level options for flexible integration and maintainability."
+---
+
+# Customizing Generation with genconfig.Config
+
+GORM CLI provides a flexible configuration system using the `genconfig.Config` struct that allows you to tailor how code generation behaves for your project. This guide walks you through how to leverage `genconfig.Config` to control output locations, customize field mappings, and selectively include or exclude interfaces and structs from code generation. Applying these configurations ensures your generated code fits your project's structure and coding standards perfectly.
+
+---
+
+## Workflow Overview
+
+- **Task Description**: Learn to customize the code generation process of GORM CLI by defining a `genconfig.Config` configuration in your packages.
+- **Prerequisites**: Basic familiarity with Go project structure, GORM models and interfaces, and having GORM CLI installed.
+- **Expected Outcome**: You will be able to adjust output directories, map Go types to custom field helpers, control which models and interfaces generate code, and scope configurations per package or file.
+- **Time Estimate**: 15-30 minutes
+- **Difficulty Level**: Intermediate
+
+---
+
+## Why Customize?
+
+By default, GORM CLI generates code with smart defaults. However, real-world projects often require fine-grained control:
+
+- To keep generated code organized in specific folders (`OutPath`).
+- To use specialized field helpers for custom or complex types.
+- To generate code only for certain interfaces or models, improving build times and clarity.
+- To apply configuration at a package or file level.
+
+Using `genconfig.Config` unlocks this flexibility without modifying the CLI command directly.
+
+---
+
+## Step-by-Step Instructions
+
+### 1. Declare a Package-Level `genconfig.Config`
+
+Create a Go source file (often named `config.go`) in the package/folder where you want to customize generation.
+
+```go
+package yourpackage
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "generated/yourpackage",
+
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+        // Map other standard or custom Go types to field helpers
+    },
+
+    FieldNameMap: map[string]any{
+        "json": JSON{},  // Map fields with gen:"json" tag to a custom JSON helper
+    },
+
+    FileLevel: false,  // Controls whether config applies to entire package (false) or only the defining file (true)
+
+    IncludeInterfaces: []any{"Query*"},        // Only generate interfaces matching this pattern
+    ExcludeInterfaces: []any{"*Deprecated*"},  // Exclude deprecated interfaces
+
+    IncludeStructs: []any{"User", "Account*"}, // Include only these structs
+    ExcludeStructs: []any{"*DTO"},               // Exclude DTO structs
+}
+```
+
+
+### 2. Understand Configuration Fields
+
+| Field           | Description                                                                                                          |
+|-----------------|---------------------------------------------------------------------------------------------------------------------|
+| `OutPath`       | Overrides the CLI `-o` output directory for files in this package. Useful to keep generated code separate.           |
+| `FieldTypeMap`  | Map Go type instances to generator field helper instances - enables custom types, e.g., `sql.NullTime` → `field.Time`|
+| `FieldNameMap`  | Map struct tags (e.g., `gen:"json"`) to custom field helpers to customize code generation per field tag.            |
+| `FileLevel`     | If true, config applies only to the specific file it's defined in; otherwise applies for whole package subtree.      |
+| `IncludeInterfaces`  | Whitelist patterns or type conversions to include only specific interfaces for generation.                          |
+| `ExcludeInterfaces`  | Blacklist patterns to exclude certain interfaces from generation—applied after IncludeInterfaces.                   |
+| `IncludeStructs`     | Whitelist patterns or literal struct types to limit code generation for select struct models.                       |
+| `ExcludeStructs`     | Blacklist patterns to exclude certain structs from code generation, applied after IncludeStructs.                   |
+
+
+### 3. Using `OutPath` to Control Output Location
+
+By specifying `OutPath`, you organize generated files away from the default (`./g`). This helps separate generated code from handwritten code.
+
+```go
+var _ = genconfig.Config{
+    OutPath: "generated/models",
+}
+```
+
+Run your generation as usual and check that generated files land in `generated/models`.
+
+### 4. Custom Field Mappings
+
+Override default field helper types for Go types or `gen` tags.
+
+```go
+FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+    mypkg.CustomType{}: CustomFieldHelper{},
+},
+
+FieldNameMap: map[string]any{
+    "json": JSON{}, // Use your JSON helper for fields tagged `gen:"json"`
+},
+```
+
+This enables generating more expressive and database-specific SQL expressions.
+
+### 5. Controlling Which Interfaces and Structs Generate Code
+
+Use include and exclude lists to restrict generated code only to relevant interfaces and structs.
+
+- Use shell-style patterns (`*`, `?`) or type conversions (e.g., `models.Query(nil)`).
+- Inclusion takes precedence over exclusion.
+
+Examples:
+
+```go
+IncludeInterfaces: []any{"Query*", models.Query(nil)},
+ExcludeInterfaces: []any{"*Deprecated*"},
+IncludeStructs: []any{"User", "Account*", models.User{}},
+ExcludeStructs: []any{"*DTO"},
+```
+
+This reduces noise and speeds generation.
+
+### 6. Applying File-Level vs Package-Level Configuration
+
+- When `FileLevel` is `false` (default), config applies recursively to all files in the package directory and subdirectories.
+- When `FileLevel` is `true`, config applies only to the specific source file defining the `genconfig.Config`. Useful to mix multiple configurations in one package.
+
+### 7. Run the Generator Normally
+
+After adding `genconfig.Config` to your project, generate code as usual:
+
+```bash
+gorm gen -i ./yourpackage -o ./generated
+```
+
+GORM CLI detects `genconfig.Config` automatically and applies overrides.
+
+---
+
+## Examples
+
+### Example: Include Only Interfaces Starting with `Query` (Whitelist)
+
+```go
+package pattern
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+    IncludeInterfaces: []any{"Query*"},
+}
+```
+
+### Example: Exclude Specific Interfaces and Structs in a Nested Folder
+
+```go
+package nested
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+    FileLevel: false,
+    ExcludeInterfaces: []any{"I3"},
+    ExcludeStructs: []any{"S3"},
+}
+```
+
+### Example: Map `sql.NullTime` and Custom Tag `date` to Dedicated Field Helpers
+
+```go
+package examples
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+    FieldNameMap: map[string]any{
+        "date": field.Time{},
+    },
+}
+```
+
+---
+
+## Troubleshooting & Tips
+
+- **Config Not Applied?**
+  - Verify your `genconfig.Config` is declared at package-level (e.g., as `var _ = genconfig.Config{...}`).
+  - Confirm the file is part of the input path specified to `-i` in `gorm gen`.
+  - Check that `FileLevel` is set correctly: use `false` for broad application.
+
+- **Field Mappings Not Working?**
+  - Ensure keys and values in `FieldTypeMap` are instances (e.g., `sql.NullTime{}`, not `sql.NullTime`).
+  - Remember `FieldNameMap` takes precedence over `FieldTypeMap`.
+  - Use fully qualified import paths consistently.
+
+- **Include/Exclude Patterns?**
+  - Use shell-style wildcards (`*` and `?`) with care.
+  - Patterns match fully qualified names including package prefixes.
+  - When using type conversions in includes/excludes, pass nil of the interface type (e.g., `models.Query(nil)`).
+
+- **Mixing multiple configs?**
+  - You can place separate `genconfig.Config` declarations in different files within a workspace.
+  - File-level configs (`FileLevel: true`) apply only to their file; package-level apply broadly.
+
+---
+
+## Next Steps & Related Content
+
+- Explore [Prepare Your Project](https://gorm.io/cli/docs/getting-started/first-usage-configuration/project-structure) to organize your code for generation.
+- See [Generate Code: Your First Run](https://gorm.io/cli/docs/getting-started/first-usage-configuration/run-generator) for running the generator.
+- Dive into [Using Generated APIs](https://gorm.io/cli/docs/getting-started/first-usage-configuration/using-generated-code) to fully leverage generated code.
+- Learn advanced template-based query customization in [Template-Driven Queries & SQL Templates](https://gorm.io/cli/docs/guides/using-generated-apis/template-based-queries).
+
+---
+
+## References
+
+- `genconfig.Config` source and field details: [github.com/go-gorm/cli/genconfig](https://github.com/go-gorm/cli/blob/main/genconfig/config.go)
+- Example configurations:
+  - [Whitelist example](https://github.com/go-gorm/cli/blob/main/examples/filters/whitelist/config.go)
+  - [Pattern include example](https://github.com/go-gorm/cli/blob/main/examples/filters/pattern/config.go)
+  - [Nested exclude example](https://github.com/go-gorm/cli/blob/main/examples/filters/twolevel/nested/config.go)
+
+---
+
+By mastering `genconfig.Config`, you elevate your GORM CLI workflow, crafting generated code that aligns precisely with your application’s architecture, improves maintainability, and maximizes productivity.
