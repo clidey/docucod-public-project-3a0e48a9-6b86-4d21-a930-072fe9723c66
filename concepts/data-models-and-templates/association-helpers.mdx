@@ -1,0 +1,240 @@
+---
+title: "Association Helpers"
+description: "See how association fields (has-one, has-many, belongs-to, many2many, and polymorphic) become fluent, chainable helpers in generated APIs. Explore the supported operations—create, update, unlink, and delete—and how their semantics adapt to association type."
+---
+
+# Association Helpers
+
+Discover how GORM CLI transforms Go model association fields—such as has-one, has-many, belongs-to, many2many, and polymorphic relations—into fluent, chainable helpers for your generated APIs. This page explains how these helpers enable powerful, type-safe operations to manage associated data, including creation, updating, unlinking (disassociation), deletion, and batch creation, with semantics tailored to each association type.
+
+---
+
+## Understanding Association Helpers
+
+When you generate APIs with GORM CLI from your Go model structs, associations transform into specialized field helpers. These helpers provide concise, expressive methods to manipulate related records safely and idiomatically alongside parent records.
+
+Association helpers come in two flavors:
+
+- `Struct[T]`: Represents a single related entity (e.g., has-one, belongs-to, polymorphic one).
+- `Slice[T]`: Represents multiple related entities (e.g., has-many, many2many).
+
+Each helper exposes a rich set of operations that you chain fluently within update or create calls, allowing fine-grained control over related data.
+
+---
+
+## Supported Association Operations
+
+You can compose association operations inside a `.Set(...)` clause, which is then executed in concert with parent creation or update using `.Create(ctx)` or `.Update(ctx)`. This design elegantly batches and scopes related actions.
+
+### 1. Create
+
+- `.Create(assignments...)` for single relations (`Struct[T]`) inserts and associates a new related record per matched parent.
+- `.Create(assignments...)` for multiple relations (`Slice[T]`) inserts and associates one new record per matched parent, for each call.
+- `.CreateInBatch(records []T)` (only on `Slice[T]`) batch inserts and associates all provided records for each matched parent.
+
+### 2. Update
+
+Update associated records matching optional filter conditions.
+
+Example:
+
+```go
+generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(
+    generated.Pet.Name.Set("rex"),
+)
+```
+
+Updates pet(s) named "fido" belonging to matched users.
+
+### 3. Unlink
+
+Detaches associations without deleting records.
+
+Semantics depend on the association type:
+
+- **Belongs To:** sets the parent’s foreign key to `NULL`.
+- **Has One/Has Many:** sets the child’s foreign key to `NULL`.
+- **Many2Many:** removes join table rows only.
+
+Example:
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+After this, the pets remain but are no longer associated with the user.
+
+### 4. Delete
+
+Deletes associated records (rows), **not** the parent rows.
+
+- For many2many, only join rows are deleted; the related entities remain.
+
+Example:
+
+```go
+generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete()
+```
+
+Deletes pets named "old" related to selected users.
+
+---
+
+## Semantics per Association Type
+
+| Association Type | Create            | Update                       | Unlink                              | Delete                         |
+|------------------|-------------------|------------------------------|-----------------------------------|-------------------------------|
+| `belongs to`     | Creates & associates the parent entity
+| Updates parent
+| Sets parent's foreign key to NULL
+| Deletes parent rows             |
+| `has one`        | Creates child & associates
+| Updates child
+| Sets child's foreign key to NULL
+| Deletes child rows             |
+| `has many`       | Creates children & associates each
+| Updates filtered children
+| Sets children's foreign key to NULL
+| Deletes child rows             |
+| `many2many`      | Creates and associates join rows
+| Updates join or related entities
+| Removes join table associations
+| Removes join table rows only (keeps related entities) |
+
+Polymorphic associations follow the same principles as `has one` or `has many`, but on foreign key columns specific to the polymorphic pattern.
+
+---
+
+## Practical Usage Examples
+
+### Creating and Associating a Single Related Record (Has One)
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Account.Create(generated.Account.Number.Set("A-001")),
+  ).
+  Create(ctx)
+```
+
+Creates a user and creates an `Account` row associated to that user.
+
+### Creating Multiple Related Records (Has Many / Many2Many)
+
+```go
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("polyglot"),
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Create(ctx)
+```
+
+Creates a user and links several languages using many2many association.
+
+### Updating Related Records with Filtering
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(
+      generated.Pet.Name.Set("rex"),
+    ),
+  ).
+  Update(ctx)
+```
+
+Update pets named "fido" related to a specific user.
+
+### Unlinking Related Records
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+Removes the association between pets and the user, leaving the pets intact.
+
+### Deleting Related Records
+
+```go
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(userID)).
+  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("old_pet")).Delete()).
+  Update(ctx)
+```
+
+Deletes the pet rows named "old_pet" belonging to the user.
+
+---
+
+## How It Works Under the Hood
+
+Association helpers wrap GORM’s powerful `clause.Association` structure, transforming method calls into properly scoped association operations. They expose methods such as:
+
+- `Create(assignments...)`
+- `CreateInBatch(records []T)`
+- `Update(assignments...)`
+- `Unlink()`
+- `Delete()`
+
+These are chainable, composable, and type-safe to the related entity type.
+
+GORM CLI generates these helpers based on model struct tags and field types, detecting association kinds (`has-one`, `has-many`, `belongs-to`, `many2many`, polymorphic) from GORM conventions.
+
+---
+
+## Best Practices and Tips
+
+- **Use filtering (`Where(...)`) on association helpers before `Update`, `Unlink`, or `Delete` to scope the operation only to relevant related records.**
+
+- **Batch create with `CreateInBatch` to efficiently insert multiple related records per parent.**
+
+- **Remember `Unlink` detaches associations but preserves related records, useful when data retention is important.**
+
+- **`Delete` on many2many only removes join table rows, so the related entities themselves remain in the database.**
+
+- **Combine parent operations and association helpers in one fluent `Set(...).Create(ctx)` or `Set(...).Update(ctx)` for atomic updates.**
+
+- **Polymorphic associations behave like `has one` or `has many` but zero out polymorphic foreign keys on unlink.**
+
+- **When using generated helpers for nested associations, the API remains fully type-safe and discoverable with autocompletion in IDEs.**
+
+---
+
+## Troubleshooting Common Scenarios
+
+<AccordionGroup title="Troubleshooting Association Operations">
+<Accordion title="Associated Records Not Created or Updated">
+Check that you are invoking `.Create(ctx)` or `.Update(ctx)` on the parent query after `.Set(...)` with association helpers. Forgetting this call means changes aren’t persisted.
+</Accordion>
+<Accordion title="Unlink Does Not Set Foreign Key to NULL">
+Ensure your database schema allows `NULL` on foreign key columns used for association. Non-nullable constraints block unlink operations.
+</Accordion>
+<Accordion title="Delete Removes More Records Than Expected">
+Always use `.Where(...)` on association helpers before `.Delete()` to scope the target associated records precisely.
+</Accordion>
+<Accordion title="Batch Create Fails to Associate Correctly">
+Confirm that the batch records slice type matches the association type, and that all batch entries have required fields set. Validate foreign key fields when necessary.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Related Links
+
+- [Working with Associations Guide](https://gorm.io/docs/gorm_cli_guides_real-world-patterns-working-with-associations.html) - Step-by-step usage patterns and examples
+- [Model-Driven Field Helpers](https://gorm.io/docs/gorm_cli_concepts_data-models-and-templates-model-driven-field-helpers.html) - How fields and associations generate helpers
+- [Seamless GORM Integration](https://gorm.io/docs/gorm_cli_guides_integration-and-best-practices-seamless-gorm-integration.html) - Using generated code with GORM ORM
+- [Configuration & Customization](https://gorm.io/docs/gorm_cli_guides_advanced-field-config.html) - Customizing association helper generation
+
+---
+
+Harness the power of GORM CLI’s association helpers to write clean, type-safe, and fluent data manipulation code for all your related data scenarios. These helpers abstract complex association logic into straightforward API calls, accelerating development while ensuring correctness and maintainability.
