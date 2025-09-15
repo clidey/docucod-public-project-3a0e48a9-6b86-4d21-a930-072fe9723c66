@@ -1,71 +1,35 @@
 ---
-title: "Best Practices and Troubleshooting"
-description: "Learn patterns and tips for sustainable code generation, versioning, and working safely in real projects. Includes common pitfalls, solutions, and advice on extending and automating the workflow."
+title: "Best Practices & Common Patterns"
+description: "Curated recommendations for structuring interfaces, models, and generator configuration. Includes best practices for maintainable code generation, ensuring safety, optimizing query performance, and leveraging GORM CLI in teams. Highlights anti-patterns and provides troubleshooting tips."
 ---
 
-# Best Practices and Troubleshooting
+# Best Practices & Common Patterns
 
-Learn proven patterns to maintain sustainable and robust code generation with GORM CLI. This guide helps you navigate common pitfalls in versioning, configuration, integration, and automating workflows, ensuring you can safely adopt and extend GORM CLI in real-world projects.
+## Overview
+
+This guide provides curated recommendations for structuring your interfaces, models, and generator configuration when using GORM CLI. It focuses on ensuring maintainable code generation, maximizing type safety, optimizing query performance, and effectively leveraging GORM CLI features especially in team environments. You will find best practices, anti-patterns to avoid, and troubleshooting tips to help you produce clean, correct, and efficient generated code.
 
 ---
 
-## 1. Sustainable Code Generation
+## Why Focus on Best Practices?
 
-### Understand the Dual-Generator Architecture
+GORM CLI’s power lies in generating type-safe, fluent, and customizable database query APIs and field helpers. However, to realize its full benefits, your input source code and configuration must be thoughtfully organized. Poor structure or improperly scoped configurations can lead to bloated generated code, confusing APIs, build errors, or runtime inefficiencies.
 
-GORM CLI produces two complementary code sets:
-- Type-safe query APIs from Go interfaces with embedded SQL templates.
-- Model-driven field helpers for filters, updates, and associations.
+This guide aims to help you:
 
-**Tip:** Treat these outputs as distinct but synergistic layers. Changes in your models or interfaces should trigger regeneration to keep both layers consistent.
+- Write clear, maintainable query interfaces and models
+- Configure the generator for selective and modular output
+- Avoid common pitfalls that cause generation issues or API misuse
+- Optimize performance and team collaboration with GORM CLI
 
-### Version Control Best Practices
+---
 
-- **Commit generated code or ignore?**
-  - Recommended to commit generated code inside your repository for ease of consumption by other developers and CI processes.
-  - Use a well-defined output directory (default `./g`) or customize via `genconfig.Config` to segregate generated files.
+## 1. Designing Query Interfaces
 
-- **Track config files explicitly.**
-  - Changes to `genconfig.Config` representations affect generation; version control these config declarations alongside your source.
+### 1.1 Use Clear and Consistent Interface Naming Patterns
 
-- **Regenerate after model or interface changes.**
-  - Avoid partial or stale outputs by always running `gorm gen` fully when your interfaces or models evolve.
-
-### Isolate Generated Code
-
-- Use output paths distinct from source to avoid cyclical imports and contamination.
-- Leverage the `OutPath` property in `genconfig.Config` to direct output.
-
-
-## 2. Versioning and Compatibility
-
-### Go Version Requirements
-
-- GORM CLI requires Go 1.18 or later due to extensive use of generics.
-- Validate your Go environment before installing or updating GORM CLI.
-
-### GORM CLI Version Management
-
-- Stay current with the latest **stable** releases to benefit from bug fixes and new features.
-- Prefer `go install gorm.io/cli/gorm@latest` for installation or updates.
-
-### Handling Breaking Changes
-
-- Read changelogs to understand API and template changes affecting generation.
-- Test generated output whenever upgrading GORM CLI.
-
-
-## 3. Working Safely in Real Projects
-
-### Incremental Adoption Strategy
-
-- Start generating code for limited interfaces or structs using the `IncludeInterfaces` and `IncludeStructs` filters.
-- Gradually expand coverage as confidence in generator stability grows.
-
-### Use Configuration Filters
-
-- Use `IncludeInterfaces`, `ExcludeInterfaces`, `IncludeStructs`, and `ExcludeStructs` with shell-style patterns to precisely control generation scope.
-- Example to generate only interfaces starting with `Query`:
+- **Use prefix or suffix patterns** like `Query*` or `*Query` to indicate interfaces intended for generation.
+- This allows your configuration to selectively generate only desired interfaces, improving build performance and reducing noise.
 
 ```go
 var _ = genconfig.Config{
@@ -73,132 +37,227 @@ var _ = genconfig.Config{
 }
 ```
 
-### Custom Type Mappings
+### 1.2 Keep Interfaces Focused
 
-- Leverage `FieldTypeMap` and `FieldNameMap` to support custom or complex field types such as JSON or SQL nullable types.
-- Define custom helpers following examples like the JSON field mapping guide.
+- Define cohesive responsibilities in each interface.
+- Avoid overly large interfaces mixing unrelated query methods.
+- Smaller, focused interfaces simplify testing, generation, and readability.
 
-### File-Level vs Package-Level Configurations
+### 1.3 Use SQL Template Comments Judiciously
 
-- Use `FileLevel: true` to apply config only to the current file, helpful in complex multi-package projects.
-- Use package-level config for consistent settings across multiple files.
+- Employ inline SQL templates for complex or custom queries.
+- Use directives like `@@table`, `@param`, `{{where}}`, and `{{set}}` for readable, maintainable templates.
+- Avoid embedding raw SQL logic that cannot be parameterized safely or is hard to test.
 
+### 1.4 Stay Explicit About Context
 
-## 4. Common Pitfalls and Solutions
+- Although GORM CLI adds `context.Context` automatically if missing, consider adding it explicitly in method signatures for clarity and control.
 
-### Generated Code Not Updating
+### 1.5 Return Types
 
-- **Cause:** Running `gorm gen` with incorrect `-i` or `-o` flags or caching issues.
-- **Solution:** Confirm input path points to updated source files; clean output directory if needed.
-- Verify that configuration filters are not excluding your interfaces or structs unintentionally.
+- Return one or two values only: data (or interface) and an error.
+- Keep return types simple to maximize utility of generated code.
 
-### Conflicting Package Imports
+---
 
-- **Cause:** Generated files import the same package with conflicting aliases or paths.
-- **Solution:** Ensure package import paths are consistent; avoid mixing relative and absolute imports.
-- Use `goimports` formatting (automatically run by generation pipeline) to catch conflicts.
+## 2. Structuring Model Structs
 
-### Missing Context Parameter in Query Methods
+### 2.1 Use Explicit Field Tags for Customization
 
-- Generated methods automatically inject `context.Context` if it's missing from interface signature.
-- Make sure your interface method parameters do not duplicate `ctx` to avoid signature conflicts.
+- Use `gen:"<tag>"` on model fields to customize field helper mapping.
+- This enables type mapping, e.g., JSON helpers, time parsing, or custom wrappers.
 
-### Errors in SQL Templates
+```go
+type User struct {
+  Profile string `gen:"json"`
+}
+```
 
-- Pay special attention to syntax in method comment SQL templates; invalid templates cause generation errors.
-- Use conditional blocks (`{{if}}`, `{{where}}`, `{{set}}`) correctly to avoid invalid SQL.
-- Escape literal `@` as `\@` to avoid placeholder conflict.
+### 2.2 Favor Composition Over Embedding for Clarity
 
-### Association Handling Mistakes
+- Although anonymous field embedding is supported, use it sparingly to avoid merging unrelated fields unintentionally.
+- Explicit fields aid readability and help the generator map fields correctly.
 
-- Understand semantic differences of `Unlink` vs `Delete` in associations.
-- Use conditional filters on association helpers to safely unlink or delete subsets.
+### 2.3 Use Consistent Naming and Keep Models Clean
 
+- Avoid complex inline struct types or deeply nested anonymous structs that complicate generation.
+- Maintain one model per file or logical grouping for easier navigation.
 
-## 5. Extending and Automating the Workflow
+---
 
-### Integration with CI/CD
+## 3. Leveraging genconfig.Config Effectively
 
-- Add `gorm gen` commands in build or generation pipelines.
-- Validate generated code for syntax and test usage in pull requests before merge.
+### 3.1 Output Path Management
 
-### Automation Tips
+- Use `OutPath` to direct generated code to dedicated folders per package.
+- Consider layered or nested output folders if your project structure warrants it.
 
-- Use watch scripts or file-change hooks to trigger automatic regeneration on source updates.
-- Use consistent folder structure and config declarations to limit scope and speed up generation.
+### 3.2 Filter Interfaces and Structs Precisely
 
-### Debugging Generation Issues
+- Use `IncludeInterfaces` and `IncludeStructs` with shell-style patterns (`*` wildcards) to whitelist what should be generated.
+- Avoid generating everything if not needed, to keep output focused and fast.
 
-- Add verbose logs (future CLI feature) or manually inspect input files for correct config declarations.
-- Review generated code directly to diagnose missing fields or interface methods.
+```go
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"Query*"},
+  IncludeStructs: []any{"User", "Account*"},
+}
+```
 
+- If you must exclude specific items, use `ExcludeInterfaces` and `ExcludeStructs`, but note whitelist takes precedence.
 
-## 6. Troubleshooting Quick Reference
+### 3.3 Field Type and Name Mapping
 
-<AccordionGroup title="Common Issues & Resolutions">
-<Accordion title="Code Not Generating for Interfaces or Structs">
-Verify your `genconfig.Config` include/exclude filters. Remember whitelist patterns override blacklists. Confirm the interface or struct names match patterns exactly including package prefixes if used.
-</Accordion>
-<Accordion title="Go Version or Environment Problems">
-Ensure Go 1.18+ is installed and configured in your environment. Run `go version` and check `GOPATH` and `GOROOT`. Reinstall GORM CLI if version mismatch is detected.
-</Accordion>
-<Accordion title="Compilation Errors in Generated Code">
-Inspect your model or interface definitions for unsupported types or incorrect SQL template syntax. Validate schema changes and regenerate code.
-</Accordion>
-<Accordion title="Association Updates Not Working as Expected">
-Confirm you use the correct association operations (`Create`, `Update`, `Unlink`, `Delete`). Check filters in association helpers to target the intended records.
-</Accordion>
-<Accordion title="Template Parsing Errors During Generation">
-Review SQL templates in interface method comments for syntax errors or unsupported constructs. Use escapes for reserved characters.
-</Accordion>
-</AccordionGroup>
+- Use `FieldTypeMap` to map Go types to specific field helper types.
+- Use `FieldNameMap` to map fields with specific `gen:""` tags to custom helpers.
 
+Example:
 
-## 7. Practical Tips for Best Results
+```go
+var _ = genconfig.Config{
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+  },
+  FieldNameMap: map[string]any{
+    "json": JSON{},
+  },
+}
+```
 
-- **Consistently name and document your interfaces and methods.** Clear method comments help maintain accurate SQL templates.
-- **Use code generation as a build step.** Avoid manual edits to generated files to prevent merges conflicts.
-- **Regularly update configurations** to incorporate custom helper mappings and field behaviors.
-- **Leverage examples** in the repository — the `examples/query.go` and `examples/models/user.go` files demonstrate idiomatic usage.
+### 3.4 File-Level Configuration
 
+- Enable `FileLevel: true` if you want a config to apply only to the generating file rather than the whole package.
+- Useful in monorepos or multi-module projects.
 
-## 8. Summary Flow Diagram
+### 3.5 Nested and Multi-Level Configurations
+
+- Parent configurations cascade down to nested directories.
+- Child configs can override or narrow generation scope.
+- Plan hierarchy to avoid conflicts or duplicated generation.
+
+---
+
+## 4. Patterns to Avoid (Anti-Patterns)
+
+### 4.1 Avoid Generating Everything Without Filtering
+
+- Generating all interfaces and structs in large projects leads to code bloat and increased build time.
+- Use filtering to generate only what is necessary for each module or package.
+
+### 4.2 Avoid Complex Inline SQL Without Parameterization
+
+- Inline SQL should be safe and type-checked.
+- Avoid unescaped raw SQL concatenation or dynamic code in templates.
+
+### 4.3 Avoid Over-Embedding Structures That Obfuscate Fields
+
+- Extensive use of anonymous struct embedding can confuse field helper generation and lead to incorrect DB column mappings.
+
+### 4.4 Avoid Mixing Generation Responsibilities in One Package
+
+- Prefer separation of query interfaces and models into distinct, clear packages.
+- This encourages cleaner generation targets and easier maintenance.
+
+---
+
+## 5. Troubleshooting Tips
+
+### 5.1 No Generated Files Appearing
+
+- Confirm your `IncludeInterfaces` and `IncludeStructs` filters match the intended types.
+- Check the `OutPath` — by default it writes to `./g` if not set.
+- Verify input path points properly to your source files.
+
+### 5.2 Unexpected Generated Methods or Types
+
+- Use explicit whitelist patterns to tightly control generation.
+- Check for name collisions or similar named types causing confusion.
+
+### 5.3 Build Errors After Generation
+
+- Confirm field helper type mappings cover custom or complex Go types.
+- Ensure embedded anonymous structs are flattened correctly, or simplify models.
+
+### 5.4 Performance Issues in Generation
+
+- Limit input scope with `-i` flag and config inclusion filters.
+- Avoid overly large or complex inline SQL templates.
+
+---
+
+## 6. Practical Example of Config Usage
+
+```go
+package examples
+
+import (
+  "database/sql"
+  "gorm.io/cli/gorm/field"
+  "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+  OutPath: "examples/output",
+
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+  },
+
+  FieldNameMap: map[string]any{
+    "json": JSON{},
+  },
+
+  IncludeInterfaces: []any{"Query*"},
+  IncludeStructs:    []any{"User", "Account*"},
+}
+```
+
+This config causes generation only for interfaces starting with `Query` and structs named `User` and `Account*`, mapping `sql.NullTime` fields to time helpers and fields tagged with `gen:"json"` to the custom JSON helper.
+
+---
+
+## 7. Summary Diagram of Best Practices Workflow
 
 ```mermaid
 flowchart TD
-    Start([Start: Prepare Models & Interfaces]) --> PrepareCode[Define Go structs and interfaces with SQL templates]
-    PrepareCode --> Configure[Optionally declare genconfig.Config]
-    Configure --> RunGen[Run `gorm gen -i <input> -o <output>`]
-    RunGen --> Checks[Inspect generated files & fix errors]
-    Checks --> UseCode[Import & use generated code in project]
-    UseCode --> Test[Write & run tests]
-    Test --> End([End: Incremental development & regenerate as needed])
+  Start["Start: Define Models & Interfaces"] --> Naming["Use Consistent Naming Patterns"]
+  Naming --> InterfaceDesign["Keep Interfaces Focused & Well-Scoped"]
+  InterfaceDesign --> SQLTemplate["Use SQL Templates with Safe Directives"]
+  SQLTemplate --> ModelDesign["Structure Models with Clear Fields & Tags"]
+  ModelDesign --> ConfigSetup["Configure genconfig.Config Filters & Mapping"]
+  ConfigSetup --> RunGenerator["Run gorm gen Command"]
+  RunGenerator --> Verify["Verify Generated Code & Build"]
+  Verify -->|Issues| Troubleshoot["Check Filtering, Config & Model Structure"]
+  Troubleshoot --> RunGenerator
+  Verify -->|Success| UseAPIs["Integrate Generated APIs into Application"]
+  UseAPIs --> End["Effectively Use Type-Safe, Maintainable Code"]
+
+  classDef tip fill:#DFF6DD,stroke:#5DB55B,stroke-width:2px;
+  class Naming,InterfaceDesign,SQLTemplate,ModelDesign,ConfigSetup tip;
 ```
 
+---
+
+## 8. Next Steps & Related Documentation
+
+- Explore the [Minimal Project Setup](../getting-started/config-gen-first-run/minimal-setup) guide to structure your project for first generation.
+- Consult [Generate Code: Your First Run](../getting-started/config-gen-first-run/run-generator) to run the generator with your config.
+- Use [Using the Generated APIs](../getting-started/config-gen-first-run/using-generated) to start integrating generated APIs.
+- Review [Advanced Patterns & Associations](../guides/advanced-patterns/association-workflows) for managing relationships.
+- For customizing generation behaviors in depth, see [Customizing Code Generation with genconfig.Config](../guides/customization-integration/generation-config).
 
 ---
 
-## Related Resources
+## 9. Additional Tips
 
-- [Getting Started with GORM CLI](https://gorm.io/docs/cli/getting-started.html)
-- [Configuring GORM CLI Generator](https://gorm.io/docs/cli/configuring-generator.html)
-- [Handling JSON Fields with Custom Helpers](https://gorm.io/docs/cli/handling-json.html)
-- [Mastering Associations Guide](https://gorm.io/docs/cli/mastering-associations.html)
-- [Common Issues Troubleshooting](https://gorm.io/docs/cli/troubleshooting.html)
-
-
-## Next Steps
-
-- Experiment with incremental interface filtering to manage complex projects.
-- Automate code generation in your CI pipeline.
-- Explore advanced customization patterns with `genconfig.Config`.
-- Dive into association management for more powerful ORM interactions.
-
-
-<Check>
-Following these best practices will safeguard your projects, reduce maintenance overhead, and empower your Go development with GORM CLI’s type-safe and fluent query generation.
-</Check>
+- Keep your source code and generator config under version control to track evolving code generation rules.
+- Regularly regenerate and review generated code after interface or model changes to catch breaking changes early.
+- Share configuration standards across your development team to maintain consistency.
+- Write clear, expressive SQL templates and document them extensively.
 
 ---
 
-*This documentation page is part of the GORM CLI user guides. For installation and first-run tutorials, please refer to the Getting Started section.*
+By following these best practices and patterns, you will harness the full power of GORM CLI to produce safe, maintainable, and high-performance database query code tailored to your project’s needs.
+
+
+---
