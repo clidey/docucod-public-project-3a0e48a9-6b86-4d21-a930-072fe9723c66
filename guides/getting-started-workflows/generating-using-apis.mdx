@@ -1,0 +1,287 @@
+---
+title: "Generating and Using Type-Safe APIs"
+description: "A hands-on tutorial on using the CLI to generate query methods and field helpers, then consuming those APIs to compose safe, expressive queries and mutations. Covers basic operations and navigating the generated code."
+---
+
+# Generating and Using Type-Safe APIs
+
+A hands-on tutorial on using the GORM CLI to generate query methods and field helpers, then consuming those generated APIs to compose safe, expressive queries and mutations. This guide covers basic operations, navigating generated code, and practical usage examples.
+
+---
+
+## Workflow Overview
+
+### Task Description
+This guide helps you use the GORM CLI tool to:
+- Generate type-safe query methods from Go interfaces annotated with SQL templates.
+- Generate model-driven field helpers for filters, updates, and associations.
+- Consume the generated APIs to compose safe and expressive queries and mutations within your Go projects.
+
+### Prerequisites
+- Have Go 1.18+ installed and correctly configured.
+- Install the GORM CLI tool using:
+  ```bash
+  go install gorm.io/cli/gorm@latest
+  ```
+- Define your Go interfaces with embedded SQL templates.
+- Define your Go struct models corresponding to your database schema.
+- Optionally, set up a `genconfig.Config` package-level variable to customize generation.
+
+### Expected Outcome
+By following this guide, you will:
+- Run the CLI tool to generate strongly-typed, compile-time safe Query APIs and field helpers.
+- Use generated methods to create, read, update, and delete database records safely.
+- Use field helpers for constructing fluent, type-checked query conditions and updates.
+- Understand how to customize and navigate the generated code efficiently.
+
+### Time Estimate
+Approximately 20-30 minutes for initial setup, code generation, and consuming the generated APIs.
+
+### Difficulty Level
+Beginner to Intermediate.
+
+---
+
+## Step-by-Step Instructions
+
+### 1. Write Query Interfaces and Models
+
+Define your **Go interface(s)** with methods annotated via SQL template comments to describe database operations.
+
+**Example:**
+```go
+// examples/query.go
+package examples
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+}
+
+// Model
+package models
+
+type User struct {
+  gorm.Model
+  Name string
+  Age  int
+}
+```
+
+**Tips:**
+- Use the `@@table` placeholder for injecting the model's database table name.
+- Bind method parameters with `@paramName` for parameterized queries in templates.
+- Include contextual comments that follow the SQL Template DSL described in the GORM CLI docs.
+
+
+### 2. Run the GORM CLI Generator
+
+Use the CLI to generate code from your input interface and models:
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+- `-i` specifies the path to your Go interfaces and models.
+- `-o` specifies the output directory for generated code.
+
+**What Happens:**
+- The tool processes your interfaces and model structs.
+- Generates interface implementations with typed methods.
+- Generates strongly typed field helpers for query-building and updates.
+
+
+### 3. Explore the Generated APIs
+
+The generated code contains:
+- Interface implementations suffixed with `Impl` which provide concrete functionality.
+- Field helpers under variables named after your model structs (e.g., `User`).
+
+```go
+// Use generated query API
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+
+// Use field helpers for query conditions
+users, err := gorm.G[User](db).
+  Where(generated.User.Age.Gt(18)).
+  Find(ctx)
+```
+
+
+### 4. Compose Queries and Mutations Using Generated APIs
+
+#### Basic Queries
+Use typed methods directly:
+```go
+u, err := generated.Query[User](db).GetByID(ctx, 5)
+```
+
+Use field helpers to build fluent conditions:
+```go
+users, err := gorm.G[User](db).
+  Where(generated.User.Name.Like("%jinzhu%"),
+        generated.User.Age.Between(18, 65)).
+  Find(ctx)
+```
+
+#### Updates and Creates
+Use field helpers to specify update fields with zero-value handling:
+
+```go
+// Update user by setting name and incrementing age
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Name.Set("jinzhu"),
+    generated.User.Age.Incr(1),
+  ).
+  Update(ctx)
+```
+
+Create new records with helper `Set`:
+```go
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Age.Set(0),
+  ).
+  Create(ctx)
+```
+
+#### Working with Associations
+Association helpers simplify common operations like create, update, unlink, and delete for related entities:
+```go
+// Create a new user and one pet
+err := gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Unlink all pets from a user
+err := gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+```
+
+### 5. Customize Code Generation (Optional)
+
+Customize generation via package-level `genconfig.Config` variables to:
+- Override output paths
+- Map custom field types
+- Whitelist or blacklist interfaces or structs
+
+Example:
+```go
+var _ = genconfig.Config{
+  OutPath: "examples/output",
+  IncludeInterfaces: []any{"Query*"},
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+  },
+}
+```
+
+Place the config in the package with your interfaces/models; the generator picks it up automatically.
+
+---
+
+## Examples & Usage Scenarios
+
+### Using Generated Field Helpers
+
+```go
+// Predicates
+generated.User.ID.Eq(1)                  // id = 1
+generated.User.Name.Like("%jinzhu%")    // name LIKE '%jinzhu%'
+generated.User.Age.Between(18, 65)         // age BETWEEN 18 AND 65
+
+// Updates with expressions
+gorm.G[User](db).
+  Where(generated.User.Name.Eq("alice"))
+  .Set(generated.User.Age.Incr(1))
+  .Update(ctx)
+```
+
+### Template-Based Query Interface Example
+
+```go
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateUser(user User, id int) error
+}
+```
+
+Usage:
+```go
+user, err := generated.Query[User](db).GetByID(ctx, 123)
+err = generated.Query[User](db).UpdateUser(ctx, User{Name: "newname"}, 123)
+```
+
+---
+
+## Troubleshooting & Tips
+
+### Common Issues
+- **No generated files appear**: Ensure your `-i` input path points to the correct package containing interfaces/models.
+- **Methods missing from generated APIs**: Check method comment formatting for SQL templates; review whitelist/blacklist config.
+- **Compilation errors due to missing imports or types**: Confirm your types are imported correctly and code is gofmt-compliant.
+
+### Best Practices
+- Use explicit SQL templates in comments to control generated queries.
+- Use the `genconfig.Config` to restrict generation to relevant interfaces and structs.
+- Always pass a valid `context.Context` to generated methods.
+- Explore generated field helpers to build rich query conditions instead of raw SQL strings.
+
+### Performance Considerations
+- Generated code is optimized for compile-time safety and runtime performance via GORM.
+- Avoid overly complex SQL templates that generate complicated queries hard to optimize.
+
+### Recovery
+- Re-run generation after modifying interfaces or models to refresh generated code.
+- Narrow generation scope with `IncludeInterfaces` and `IncludeStructs` to improve build times.
+
+---
+
+## Next Steps & Related Content
+
+- **Defining Query Interfaces & Models**: Learn the foundational step of writing interfaces with embedded SQL (`/guides/getting-started-workflows/defining-interfaces-models`).
+- **Working with Associations**: Master handling relational data using generated association helpers (`/guides/advanced-usage-patterns/working-with-associations`).
+- **Template-Based Queries & SQL DSL**: Deep dive into the SQL templating DSL powering query method generation (`/guides/advanced-usage-patterns/template-based-queries`).
+- **Integrating Generated Code**: Understand how to import and use generated APIs in your Go projects (`/getting-started/configure-and-generate/project-integration`).
+
+Use these guides to enhance your mastery of GORM CLI and build robust, type-safe database operations.
+
+---
+
+## Appendix: Quick Reference for CLI Commands
+
+```bash
+# Generate code with input directory and output directory
+gorm gen -i ./path/to/interfaces -o ./generated
+```
+
+```go
+// Use generated query methods
+user, err := generated.Query[User](db).GetByID(ctx, 7)
+
+// Compose queries with field helpers
+users, err := gorm.G[User](db).
+  Where(generated.User.Name.Eq("alice"), generated.User.Age.Gt(18)).
+  Find(ctx)
+```
+
+---
