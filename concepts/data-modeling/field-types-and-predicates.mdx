@@ -1,0 +1,265 @@
+---
+title: "Supported Field Types and Predicates"
+description: "Review the range of Go types—primitives, custom types, JSON fields—and how each is mapped to field helpers. Understand key predicates, setters, and update scenarios supported out-of-the-box, including extensibility for non-standard types."
+---
+
+# Supported Field Types and Predicates
+
+Explore the range of Go types supported by GORM CLI's generated field helpers, including primitives, nullable wrappers, and custom JSON types. Learn how these types are mapped to specific field helpers, and understand the key predicates, setters, and update scenarios available by default. This guide also covers how to extend the field helper system with custom types to fit non-standard modeling needs.
+
+---
+
+## Understanding Field Helpers
+
+Field helpers are strongly typed abstractions generated from your Go model structs. They provide a fluent, type-safe API for constructing SQL queries and updates without crafting raw SQL strings. Their design aligns directly with the Go field types and the underlying database columns.
+
+The generated field helpers fall into two broad categories:
+
+- **Basic Fields**: Correspond to primitive and common Go types like integers, strings, booleans, times, and nullable wrappers.
+- **Association Fields**: Wrap related structs and slices representing model relationships.
+
+This page focuses specifically on **Basic Fields** — how Go types map to field helpers and the standard predicates and setter methods exposed.
+
+---
+
+## Field Type Mapping
+
+### 1. Go Primitive and Standard Types
+
+The generator inspects each model’s struct fields and maps their Go type to a corresponding field helper. Here are typical mappings:
+
+| Go Type           | Generated Field Helper             | Description                          |
+|-------------------|----------------------------------|------------------------------------|
+| `int`, `int32`, `int64`, `uint`, `uint32`, `uint64` | `field.Number[T]`                   | Number helper for integral and floating types, supports rich numeric predicates and arithmetic setters. |
+| `float32`, `float64` | `field.Number[T]`                   | Float-capable Number helper, supports comparisons and updates. |
+| `string`            | `field.String`                    | Provides string-specific predicates like `Like()`. |
+| `bool`              | `field.Bool`                      | Boolean helper for equality checks. |
+| `time.Time`         | `field.Time`                      | Time-specific predicates like `IsNull()`, comparisons, and ordering. |
+| `[]byte`            | `field.Bytes`                     | Binary data field, supports basic equality and assignment. |
+
+### 2. Nullable Types
+
+For fields using nullable wrappers like `sql.NullInt64`, `sql.NullTime`, or other interfaces implementing database/sql `Scanner` and `Valuer`, the generator defaults to `field.Field[T]`. These provide predicates for NULL checking (`IsNull`, `IsNotNull`) and equality, but avoid unsafe dereferencing.
+
+Example types in this category:
+
+- `sql.NullInt64`
+- `sql.NullTime`
+- `gorm.DeletedAt`
+
+### 3. Custom JSON Types
+
+Fields tagged specifically (e.g., with `gen:"json"`) can be mapped to custom JSON helpers. By default, a JSON helper wraps such fields to generate database-specific JSON operations, such as:
+
+- MySQL: `JSON_EXTRACT` and `JSON_CONTAINS`
+- SQLite: `json_extract` and `json_valid`
+- PostgreSQL: `jsonb_extract_path_text`
+
+This extensibility allows complex querying on JSON columns without losing type safety.
+
+### 4. Structs and Slices (Associations)
+
+While this guide focuses on supported basic field types, it’s important to note associations generate different helpers:
+
+- `field.Struct[T]`: Represents a single associated struct field (has one, belongs to).
+- `field.Slice[T]`: Represents a slice of associated structs (has many, many2many).
+
+---
+
+## Using Field Helpers: Predicates and Setters
+
+Each field helper exposes a rich set of methods, empowering you to express WHERE filters, ORDER BY clauses, and UPDATE SET assignments fluently with full type safety.
+
+### Common Predicate Methods
+
+These methods build SQL expressions for filtering queries.
+
+- **Equality and Inequality:**
+  - `Eq(value)` - field equals the given value.
+  - `Neq(value)` - field not equal to value.
+
+- **Relational Operators (for numeric and time fields):**
+  - `Gt(value)` / `Lt(value)` - greater than / less than.
+  - `Gte(value)` / `Lte(value)` - greater than or equal / less than or equal.
+  - `Between(v1, v2)` - field between two values.
+
+- **Set Membership:**
+  - `In(values...)` - field in list.
+  - `NotIn(values...)` - field not in list.
+
+- **Nullability Checks:**
+  - `IsNull()` - field IS NULL.
+  - `IsNotNull()` - field IS NOT NULL.
+
+- **String-Specific:**
+  - `Like(pattern)` - SQL LIKE pattern matching.
+
+- **JSON Helpers:**
+  - `.Equal(jsonPath, value)` - JSON path comparison using DB-specific syntax.
+  - `.Contains(jsonValue)` - JSON exists or contains check.
+
+
+### Update Setter Methods
+
+Each helper also provides setter helpers used inside `Set(...)` clauses of updates or creates:
+
+- `Set(value)` - assign this exact value to the field.
+- `SetExpr(expr)` - assign a computed SQL expression.
+
+Numeric fields enhance this with:
+
+- Arithmetic setters for in-place modifications:
+  - `Incr(value)` - increment by value.
+  - `Decr(value)` - decrement by value.
+  - `Mul(value)` - multiply by value.
+  - `Div(value)` - divide by value.
+
+Additionally, string fields can expose custom expression setters like `Upper()` for common transformations.
+
+---
+
+## Practical Examples
+
+### Filtering Users Over Age 18 with Active Roles
+
+```go
+users, err := gorm.G[models.User](db).
+	Where(
+		generated.User.Age.Gt(18),
+		generated.User.Role.Eq("active"),
+	).Find(ctx)
+```
+
+This uses `Number[int]` and `String` helpers with `Gt()` and `Eq()` to build a WHERE clause with age and role conditions.
+
+### Updating Role and Score for a User
+
+```go
+db := gorm.G[models.User](db)
+
+// Set role to "active" and score to 99
+err := db.Where(generated.User.Name.Eq("set_user")).
+	Set(
+		generated.User.Role.Set("active"),
+		generated.User.Score.Set(sql.NullInt64{Int64: 99, Valid: true}),
+	).Update(ctx)
+```
+
+`Set()` creates update assignments that GORM CLI applies in a type-safe manner.
+
+### Incrementing a User's Age
+
+```go
+rowsUpdated, err := gorm.G[models.User](db).
+	Where(generated.User.Name.Eq("bob")).
+	Set(generated.User.Age.Incr(1)).
+	Update(ctx)
+```
+
+This effectively runs `age = age + 1` in SQL using the `Incr()` setter.
+
+### JSON Field Filtering
+
+```go
+// Filter users where 'profile' JSON has vip: true
+user, err := gorm.G[models.User](db).
+	Where(generated.User.Profile.Equal("$.vip", 1)).Take(ctx)
+```
+
+This generates database-specific JSON queries using the JSON field helper.
+
+---
+
+## Extending Field Types
+
+You can map custom Go types or struct tags to your own field helpers via generation configuration (`genconfig.Config`).
+
+Example to map a field tagged `json` to a custom JSON helper:
+
+```go
+var _ = genconfig.Config{
+	FieldNameMap: map[string]any{
+		"json": JSON{},
+	},
+}
+```
+
+Your custom helper should implement key methods similar to built-in helpers to support predicates and setters.
+
+---
+
+## Troubleshooting and Best Practices
+
+- **Use Explicit Typing**: Always confirm your Go type and struct tags are consistent; incorrect types can mis-map to generic `field.Field[T]` which lacks helpful methods.
+- **Nullable Fields**: Use nullable wrappers (`sql.NullInt64`, `sql.NullTime`) carefully and use `.IsNull()` to check nulls in queries.
+- **Zero-Value Update Caution**: Update setters accept zero values explicitly (e.g., empty string, 0), allowing you to clear columns if intended.
+- **Expression Setters**: Prefer expression setters (`SetExpr`, `Incr`) for atomic DB-side arithmetic to avoid race conditions.
+- **JSON Handling**: Ensure your DB supports JSON functions required by the helper; otherwise, queries may fail.
+
+---
+
+## Summary
+
+GORM CLI generates field helpers from model structs that map Go types to precise SQL predicates and setters. These helpers empower you to build expressive queries and updates with compile-time safety. You can extend this system for custom types like JSON fields. Understanding these helpers accelerates writing safe and maintainable database interactions in Go applications.
+
+---
+
+## Diagram: Overview of Field Helper Classification
+
+```mermaid
+classDiagram
+    class FieldHelper {
+      +Eq(value)
+      +Neq(value)
+      +IsNull()
+      +IsNotNull()
+      +Set(value)
+      +SetExpr(expr)
+    }
+
+    class NumberHelper {
+      +Gt(value)
+      +Lt(value)
+      +Between(v1, v2)
+      +Incr(value)
+      +Decr(value)
+    }
+
+    class StringHelper {
+      +Like(pattern)
+      +Upper()
+    }
+
+    class JSONHelper {
+      +Equal(path, value)
+      +Contains(value)
+    }
+
+    class StructHelper
+    class SliceHelper
+
+    FieldHelper <|-- NumberHelper
+    FieldHelper <|-- StringHelper
+    FieldHelper <|-- JSONHelper
+
+    FieldHelper <|-- StructHelper
+    FieldHelper <|-- SliceHelper
+
+    note right of NumberHelper: For int, float, uint
+    note right of StringHelper: For string fields
+    note right of JSONHelper: For custom JSON fields with DB-specific
+
+```
+
+---
+
+## Related Documentation
+- [Using Generated Field Helpers](https://docs.gorm.io/guides/getting-started-workflows/using-field-helpers) — Practical usage scenarios
+- [Associations: Relations, Operations, and Semantics](https://docs.gorm.io/concepts/data-modeling/associations-modeling) — Handling associations generated alongside fields
+- [Template-Based SQL Queries](https://docs.gorm.io/guides/advanced-usage-patterns/template-queries) — Combining with query interfaces
+- [Customizing Code Generation with Config](https://docs.gorm.io/concepts/extensibility-integration/generation-config) — Extend/customize field mappings
+
+---
+
+## Next Steps
+Upon mastering supported field types and predicates, explore how to leverage association helpers for relational data access and updates. Practice building complex, type-safe queries using generated helpers combined with interface-driven query APIs to gain full control over your GORM-based database interactions.
