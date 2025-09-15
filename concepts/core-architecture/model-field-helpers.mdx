@@ -1,0 +1,234 @@
+---
+title: "Model-Driven Field Helpers"
+description: "Examine how your Go structs serve as the blueprint for generating field-level helpers—enabling expressive filters, assignments, ordering, and associations. See how core types, association patterns, and custom field mappings (like JSON) are all translated into compile-time-safe abstractions."
+---
+
+# Model-Driven Field Helpers
+
+Explore how GORM CLI transforms your Go model structs into powerful, type-safe field helpers that enrich your query and update operations. These helpers empower you to build expressive filters, assignments, ordering criteria, and manage associations with compile-time safety. This guide details how core Go field types map to generated helpers, how associations are represented, and how to extend mapping for custom fields like JSON.
+
+---
+
+## Understanding the Role of Model-Driven Field Helpers
+
+Your Go structs are more than just data containers—they provide the blueprint for GORM CLI to generate strongly typed field helpers. These helpers enable you to:
+
+- Construct **type-safe predicates** for filtering by fields using fluent methods like `.Eq()`, `.Gt()`, `.IsNull()`, etc.
+- Use **setters and setters with expressions** to build expressive update operations, e.g., `.Set()`, `.SetExpr()`, `.Incr()`.
+- Manage **association operations** such as create, update, unlink, delete, and batch create of related entities via generated helpers.
+
+This model-driven generation eliminates manual boilerplate and catches potential errors at compile-time.
+
+---
+
+## Basic Field Types and Their Generated Helpers
+
+GORM CLI recognizes common Go types and produces corresponding field helpers to support predicates and assignments with intuitive methods.
+
+### Core Scalar Types
+
+| Go Type         | Generated Helper Type      | Usage Example
+|-----------------|----------------------------|--------------------------------------------------------|
+| `string`        | `field.String`             | `generated.User.Name.Eq("jinzhu")`                   |
+| `int`, `int32`, `uint`, etc. | `field.Number[Type]`        | `generated.User.Age.Gt(18)`                            |
+| `bool`          | `field.Bool`               | `generated.User.IsAdult.Eq(true)`                      |
+| `time.Time`     | `field.Time`               | `generated.User.CreatedAt.Between(t1, t2)`            |
+| `[]byte`        | `field.Bytes`              | Raw bytes filters and setters                          |
+
+### Nullable Types (e.g., `sql.NullInt64`, `sql.NullTime`)
+
+Nullable types generate `field.Field[NullableType]` helpers that support `IsNull()` and `IsNotNull()` predicates, enabling straightforward handling of database NULL values:
+
+```go
+// Filter users with NULL LastLogin
+gorm.G[User](db).Where(generated.User.LastLogin.IsNull()).Find(ctx)
+```
+
+### Custom Named Types & Interfaces
+
+- Types implementing interfaces like `sql.Scanner`, `driver.Valuer`, or GORM's `Valuer` and `SerializerInterface` are recognized and wrapped as `field.Field[T]`.
+- This design handles complex types transparently.
+
+### How Type Mapping Works
+
+The generator uses built-in mappings but also respects your configuration in `genconfig.Config` if you override mappings for specific Go types or struct field tags.
+
+---
+
+## Working with Struct Associations
+
+Associations in your models translate into specialized field helpers that model relational links and enable type-safe operations on related data.
+
+### Association Helper Types
+
+| Association Type           | Generated Helper Type        | Example Field on `User`
+|----------------------------|-----------------------------|------------------------|
+| Has One / Belongs To       | `field.Struct[AssociatedType]` | `generated.User.Account`          |
+| Has Many / Many to Many    | `field.Slice[AssociatedType]`   | `generated.User.Pets`, `generated.User.Languages` |
+
+These helpers allow you to perform CRUD operations on related entities fluently combined with your main queries.
+
+### Supported Association Operations
+
+- **Create**: Insert and associate new related rows
+- **CreateInBatch**: Batch insert linked rows for many-to-many or has-many
+- **Update**: Update particular associated rows with predicates
+- **Unlink**: Removes association links without deleting rows (sets foreign keys to NULL or removes join rows)
+- **Delete**: Deletes the associated rows or join rows
+
+### Example Usage
+
+```go
+// Create a new user and a pet
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+
+// Update pets named 'fido' for user ID 1
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+
+// Unlink pets from a user (clear association)
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Batch associate languages (many2many)
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}})).
+  Update(ctx)
+```
+
+### Association Semantics
+
+| Association   | Unlink Behavior                  | Delete Behavior                    |
+|---------------|---------------------------------|----------------------------------|
+| Belongs To    | Set foreign key to NULL          | Delete the related row            |
+| Has One/Many  | Set child foreign keys to NULL   | Delete child rows                 |
+| Many2Many     | Remove join table rows only      | Remove join table rows only       |
+
+---
+
+## Custom Field Mappings: Handling JSON Fields
+
+Sometimes fields need special SQL behaviors. For example, JSON columns vary across dialects. GORM CLI supports mapping such fields to custom helpers.
+
+### Steps to Use a Custom JSON Field Helper
+
+1. **Add Struct Tag to Model Field**
+
+```go
+// Profile is a JSON column flagged with `gen:"json"`
+Profile string `gen:"json"`
+```
+
+2. **Declare a Custom JSON Helper Type**
+
+Define a helper `JSON` type that generates SQL suitable for your dialects (MySQL, SQLite, Postgres), implementing methods like `.Equal()` for JSON path queries.
+
+```go
+// JSON generates JSON-aware SQL expressions
+type JSON struct{ column clause.Column }
+
+func (j JSON) WithColumn(name string) JSON {...}
+
+func (j JSON) Equal(path string, value any) clause.Expression {...}
+```
+
+3. **Configure `genconfig.Config` to Map the Field**
+
+```go
+var _ = genconfig.Config{
+    FieldNameMap: map[string]any{
+        "json": JSON{},
+    },
+}
+```
+
+4. **Use in Queries**
+
+```go
+// Filter users where Profile contains vip=true
+gorm.G[User](db).
+    Where(generated.User.Profile.Equal("$.vip", true)).Take(ctx)
+```
+
+### Benefits
+
+- Abstracts dialect differences behind a helper
+- Keeps query code clean and type-safe
+- Easily extensible to other custom types
+
+---
+
+## Best Practices & Common Pitfalls
+
+- Always use generated helpers for composing predicates and update expressions to ensure type-safety and consistency.
+- Associates can chain `.Where()` on association helpers to apply filters before update/unlink/delete operations.
+- Be mindful when unlinking and deleting associations—understand the semantics based on association type to prevent unintended data loss.
+- Zero-value updates (`Set` with zero values) are explicit and supported, enabling clear intent in your update queries.
+- When working with nullable fields, use `IsNull()`, `IsNotNull()`, or set values with nullable types to represent NULL semantics properly.
+- Customize field mappings via `genconfig.Config` to tailor helper generation to your project needs.
+
+---
+
+## Summary
+
+Model-driven field helpers are the backbone of GORM CLI's type-safe query and mutation capabilities. By leveraging your Go struct definitions, GORM CLI generates a rich API that simplifies and secures database operations—from basic field predicates to advanced relational association management, including support for custom field types like JSON.
+
+Explore the full potential by defining clear models, configuring generation mappings, and confidently constructing your database queries and updates with expressive, compile-time-checked helpers.
+
+---
+
+## See Also
+
+- [Field Helpers Basics Guide](/guides/core-workflows/field-helpers-basics) — Practical usage patterns and examples
+- [Working with Associations](/guides/advanced-patterns/working-with-associations) — Deep dive on association helpers and workflows
+- [Configuration & Extensibility](/overview/features-and-workflows/configuring-generation) — Customize field mapping and generation
+- [Using Generated APIs](/guides/core-workflows/using-generated-apis) — Putting helpers into effective use
+
+---
+
+## Example Generated Code Snippet
+
+```go
+var User = struct {
+    ID        field.Number[uint]
+    Name      field.String
+    Age       field.Number[int]
+    IsAdult   field.Bool
+    Profile   examples.JSON
+    Pets      field.Slice[models.Pet]
+    Account   field.Struct[models.Account]
+}{
+    ID:        field.Number[uint]{}.WithColumn("id"),
+    Name:      field.String{}.WithColumn("name"),
+    Age:       field.Number[int]{}.WithColumn("age"),
+    IsAdult:   field.Bool{}.WithColumn("is_adult"),
+    Profile:   examples.JSON{}.WithColumn("profile"),
+    Pets:      field.Slice[models.Pet]{}.WithName("Pets"),
+    Account:   field.Struct[models.Account]{}.WithName("Account"),
+}
+```
+
+This snippet shows how primitive fields and associations are exposed as field helpers, tagged with column or field names for SQL generation.
+
+---
+
+## Troubleshooting
+
+- **Missing or incorrect helper types:** Ensure your models are exported and fields have appropriate tags if custom mapping is needed.
+- **Unexpected NULL behavior:** Use nullable types with correct helper predicates `.IsNull()` and `.IsNotNull()`.
+- **Associations not recognized:** Verify GORM relationship tags (`has many`, `belongs to`, `many2many`) on your fields as these guide association helper generation.
+- **Custom field mapping not working:** Confirm your `genconfig.Config` is correctly declared and applied in the same package.
+
+If issues persist, check the [Troubleshooting Common Issues](/getting-started/configuration-and-troubleshooting/troubleshooting) guide for detailed advice.
