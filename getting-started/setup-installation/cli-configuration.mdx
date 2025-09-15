@@ -1,0 +1,261 @@
+---
+title: "Initial Project Configuration"
+description: "Understand how to structure your models and query interfaces, and optionally declare generation configuration using genconfig.Config. Walks through adapting your codebase for GORM CLI and setting up generation output paths."
+---
+
+# Initial Project Configuration
+
+Understand how to structure your models and query interfaces, and optionally declare generation configuration using `genconfig.Config`. This guide walks you through adapting your codebase for GORM CLI and setting up generation output paths to efficiently control the generated code location and behavior.
+
+---
+
+## 1. Structuring Models and Query Interfaces
+
+GORM CLI generates type-safe query APIs and model-driven field helpers by scanning Go packages for your **model structs** and **interface types** annotated with SQL comments.
+
+### What to include in your project?
+
+- **Model structs** representing your database tables, typically GORM-compatible.
+- **Query interfaces** describing your SQL queries using inline SQL templates in method comments.
+
+All types should be organized in packages or directories where the generator can find them.
+
+### Example of a model and query interface:
+
+```go
+// models/user.go
+package models
+
+type User struct {
+    ID   uint
+    Name string
+    Age  int
+}
+
+// queries/user_query.go
+package queries
+
+type UserQuery[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateUser(user models.User, id int) error
+}
+```
+
+Place your queries and models in the same package or directory to simplify scanning.
+
+<Tip>
+Organize your Go code logically to help the CLI locate related interfaces and structs for effective generation.
+</Tip>
+
+---
+
+## 2. Declaring Generation Configuration with `genconfig.Config`
+
+While GORM CLI works with zero configuration, adding a `genconfig.Config` literal at the package level allows you to customize generation behavior, such as output paths, type mappings, and filtering of interfaces or structs.
+
+### How to declare `genconfig.Config`
+
+Create a Go file in your package (e.g., `config.go`) and add:
+
+```go
+package yourpackage
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    // Customize output path for generated files in this package
+    OutPath: "generated/output",
+
+    // Map specific Go types to GORM CLI field helpers
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+
+    // Map struct field gen tag names to custom helpers
+    FieldNameMap: map[string]any{
+        "date": field.Time{},
+        "json": JSON{}, // assuming JSON helper defined
+    },
+
+    // Optional: restrict interfaces and structs to generate
+    IncludeInterfaces: []any{"Query*"},
+    ExcludeInterfaces: []any{"*Deprecated*"},
+    IncludeStructs:    []any{"User", "Account*"},
+    ExcludeStructs:    []any{"*DTO"},
+}
+```
+
+### Config Fields Explained
+
+| Field             | Purpose                                                         |
+|-------------------|-----------------------------------------------------------------|
+| `OutPath`         | Overrides CLI output directory for generated files in this package.
+| `FieldTypeMap`    | Maps Go types to specific field helper wrappers (customize field behavior).
+| `FieldNameMap`    | Maps struct tags (e.g., `gen:"json"`) to helper types.
+| `IncludeInterfaces` | Whitelist to generate only specific interfaces (supports patterns and typed nil).
+| `ExcludeInterfaces` | Blacklist to skip certain interfaces.
+| `IncludeStructs`    | Whitelist specific struct types.
+| `ExcludeStructs`    | Blacklist specific struct types.
+
+<Tip>
+Whitelist rules take precedence: if `IncludeInterfaces` or `IncludeStructs` is set, only matching types are processed, ignoring excludes.
+</Tip>
+
+<Note>
+Use **typed literals** (e.g., `models.User{}` or `models.Query(nil)`) for precise filtering alongside string patterns.
+</Note>
+
+---
+
+## 3. Output Path Setup
+
+By default, generated code files are created in a standard output path (commonly `./g`). Declaring `OutPath` in your config or passing the `-o` flag during generation overrides this.
+
+### Setting output paths
+
+- **In config:**
+
+```go
+var _ = genconfig.Config{
+  OutPath: "my/generated/code",
+}
+```
+
+- **CLI command:**
+
+```bash
+gorm gen -i ./path/to/your/pkg -o ./generated_codes
+```
+
+### How the generator applies paths
+
+- If a Config with `OutPath` is found in a package, its output path overrides the CLI flag for that package’s generated code.
+- The generator preserves your input package subfolder structure inside the `OutPath`.
+
+<Tip>
+Consistently use config-based or CLI-based output paths to avoid confusion in locating generated files.
+</Tip>
+
+---
+
+## 4. Adapting Your Codebase for GORM CLI
+
+### Best Practices
+
+- **Annotate SQL in interfaces:** Use Go interface methods with SQL in comments. This is the source of query generation.
+- **Declare models with exported fields:** GORM CLI scans exported fields to generate field helpers.
+- **Use struct tags for field mapping:** Use `gen:"tag"` tags when you want to map fields to specific helpers.
+
+### Handling Large Projects
+
+- Organize your project into packages with logical boundaries.
+- Add package-level `genconfig.Config` files in key packages to tailor generation (including filters to reduce noise).
+- Use `Include*` and `Exclude*` filters to avoid generating unwanted queries or structs.
+
+<Tip>
+Configuring `genconfig.Config` helps you scale the generation step as your codebase grows.
+</Tip>
+
+---
+
+## 5. Example Walkthrough: Adding a Config
+
+Assuming you have the following layout:
+
+```
+/pkg
+  /models
+    user.go
+  /queries
+    user_query.go
+  config.go
+```
+
+In `pkg/config.go`:
+
+```go
+package pkg
+
+import (
+    "database/sql"
+    "gorm.io/cli/gorm/field"
+    "gorm.io/cli/gorm/genconfig"
+)
+
+var _ = genconfig.Config{
+    OutPath: "pkg/generated",
+    FieldTypeMap: map[any]any{
+        sql.NullTime{}: field.Time{},
+    },
+    IncludeInterfaces: []any{"UserQuery*"},
+    IncludeStructs:    []any{"User"},
+}
+```
+
+Run the generator:
+
+```bash
+gorm gen -i ./pkg -o ./pkg/generated
+```
+
+You will find generated query API and model helpers inside `pkg/generated`, scoped to interfaces starting with "UserQuery" and the "User" struct.
+
+---
+
+## 6. Troubleshooting and Tips
+
+<AccordionGroup title="Common Configuration Issues">
+<Accordion title="Config Not Picked Up">
+Verify that your `genconfig.Config` variable is declared as a package-level variable with the correct import path `gorm.io/cli/gorm/genconfig`.
+
+The variable must be assigned to a blank identifier, e.g., `var _ = genconfig.Config{...}` to ensure it is a package-level variable.
+</Accordion>
+<Accordion title="Output Files Generated in Unexpected Location">
+Check the value of `OutPath` in your config and the CLI `-o` flag. The generator resolves package-level config `OutPath` first, overriding the CLI flag.
+
+If you want uniform output paths, set `OutPath` explicitly or avoid conflicting CLI flags.
+</Accordion>
+<Accordion title="Interfaces or Structs Not Being Generated">
+Review your `Include*` and `Exclude*` filters. Remember that if `IncludeInterfaces` or `IncludeStructs` is non-empty, only those matching are processed.
+
+Patterns may be shell-style wildcards or typed literals.
+</Accordion>
+</AccordionGroup>
+
+<Tip>
+Simplify your config during initial setup by setting only `OutPath` and removing whitelist/blacklist filters to ensure all intended code is generated.
+</Tip>
+
+---
+
+## 7. Next Steps
+
+- Proceed to [Generating Your First Code](/getting-started/first-use-validation/generate-first-code) to run the CLI and generate code based on your configured project.
+- Explore [Validating Generated APIs](/getting-started/first-use-validation/validate-generated-code) to learn how to use the generated code.
+- For deeper customization, see [Customizing Code Generation with Configurations](/guides/advanced-usage-patterns/customizing-generation).
+
+
+---
+
+## References & Links
+
+- [Prerequisites & System Requirements](/getting-started/setup-installation/prerequisites-requirements)
+- [Installing GORM CLI](/getting-started/setup-installation/cli-installation)
+- [Generating Your First Code](/getting-started/first-use-validation/generate-first-code)
+- [genconfig.Config API Reference](https://pkg.go.dev/gorm.io/cli/gorm/genconfig#Config)
+
+<Tip>
+Properly structuring your codebase and declaring generation configs is key to an efficient GORM CLI workflow. This foundation enables scalable, maintainable code generation tailored precisely to your project needs.
+</Tip>
