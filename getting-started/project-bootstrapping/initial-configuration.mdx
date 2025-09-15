@@ -1,0 +1,199 @@
+---
+title: "Optional: Customizing Generation with Config"
+description: "Set up and tweak code generation using genconfig.Config for tailored output paths, field mappings, and interface or struct whitelisting/blacklisting. Ideal for users with more advanced needs at project launch."
+---
+
+# Optional: Customizing Generation with Config
+
+Customize your GORM CLI code generation precisely for your project by leveraging the `genconfig.Config` type. This page guides you through configuring output paths, field mappings, and selective interface or struct generation, empowering you to tailor generated code to your exact needs at project startup or for advanced use cases.
+
+---
+
+## 1. Why Customize Generation?
+
+By default, GORM CLI generates output to a specified directory with broad interface and struct processing. However, many projects require:
+
+- Controlling where generated files are placed per package
+- Mapping specific Go types or field names to custom wrappers (e.g., handling `sql.NullTime` as a specialized time field)
+- Whitelisting or blacklisting particular interfaces and structs to refine generation scope and reduce clutter
+
+Using `genconfig.Config`, you gain fine-grained control to keep generated code well-scoped, maintainable, and tailored.
+
+## 2. Configuration Approach
+
+Configurations are declared as Go variables in your source files, typically within the same package as your query interfaces or models.
+
+```go
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+    OutPath: "custom/generated",      // Customize output directory for this package
+    FieldTypeMap: map[any]any{         // Map raw Go types to wrapper types
+        sql.NullTime{}: field.Time{},
+    },
+    FieldNameMap: map[string]any{       // Override type by field name regardless of Go type
+        "created_at": field.Time{},
+    },
+    IncludeInterfaces: []any{"Query*"}, // Only generate interfaces starting with Query
+    ExcludeStructs:    []any{"DebugModel"},
+}
+```
+
+> The literal variable assignment with `var _ = genconfig.Config{ ... }` enables the CLI to discover and apply this config automatically when running generation.
+
+## 3. Configuration Fields Explained
+
+| Field Name          | Description                                                                                 |
+|---------------------|---------------------------------------------------------------------------------------------|
+| `OutPath`           | Overrides the default output directory for generated code within this package.              |
+| `FieldTypeMap`      | Maps actual Go types (instances) to wrapper types for field helpers.                       |
+| `FieldNameMap`      | Maps specific field names (tags) to override type-to-wrapper resolution.                   |
+| `FileLevel`         | Boolean flag to indicate per-file vs. per-package config scope. Typically false.           |
+| `IncludeInterfaces` | Whitelist of interface names or patterns to process; others excluded.                      |
+| `ExcludeInterfaces` | Blacklist of interface names or patterns to ignore after includes are applied.             |
+| `IncludeStructs`    | Whitelist of struct names or patterns to process.                                          |
+| `ExcludeStructs`    | Blacklist of struct names or patterns to exclude.                                          |
+
+
+## 4. Step-by-Step Customization Example
+
+### Step 1: Create a Config File
+
+Place a Go source file, e.g., `config.go`, in your package where query interfaces or models live.
+
+```go
+package mypackage
+
+import ( 
+  "database/sql"
+  "gorm.io/cli/gorm/genconfig"
+  "gorm.io/cli/gorm/field"
+)
+
+var _ = genconfig.Config{
+  OutPath: "internal/generated",                       // Custom output folder
+  FieldTypeMap: map[any]any{sql.NullTime{}: field.Time{}}, 
+  FieldNameMap: map[string]any{"deleted_at": field.Time{}},
+  IncludeInterfaces: []any{"*Repository", "Query*"},  // Only select interfaces
+  ExcludeStructs: []any{"DebugModel"},                 // Skip debug structs
+}
+```
+
+### Step 2: Run GORM CLI Generation
+
+Invoke the CLI as usual. It will discover this config automatically and generate output accordingly.
+
+```bash
+gorm gen -i ./mypackage/interfaces.go -o ./mypackage/generated
+```
+
+Note: The `OutPath` in config will override the CLI `-o` flag for this package.
+
+### Step 3: Verify Results
+
+- Generated files are placed in `internal/generated`.
+- Only interfaces matching `*Repository` or starting with `Query` are processed.
+- The `DebugModel` struct is ignored.
+- Fields typed as `sql.NullTime` or named `deleted_at` use `field.Time` wrappers.
+
+## 5. Common Patterns and Advanced Usage
+
+### Fine-Grained Interface & Struct Filtering
+
+Use shell-style pattern matching or explicit type literals:
+
+```go
+IncludeInterfaces: []any{"Query*", "custompkg.MyInterface(nil)"},
+ExcludeStructs: []any{"InternalModel", mypkg.TempModel{}},
+```
+
+### FieldTypeMap vs. FieldNameMap Priority
+
+`FieldNameMap` always takes precedence when both are specified for the same field.
+
+### FileLevel Flag
+
+Set `FileLevel: true` to apply config only at the file level, useful in multi-package repositories with overlapping names.
+
+## 6. Best Practices and Tips
+
+- Place the config close to related interfaces/models for clarity and automatic discovery.
+- Use pattern-based includes/excludes to keep scopes manageable.
+- Declare types explicitly to help the generator infer imports and methods correctly.
+- Avoid over-filtering in initial setups to prevent missing interfaces unintentionally.
+
+## 7. Troubleshooting Common Issues
+
+<AccordionGroup title="Common Troubleshooting Scenarios">
+<Accordion title="Config Not Applying">
+Ensure the config variable is a top-level declaration with `var _ = genconfig.Config{...}` syntax and is compiled with the target package.
+</Accordion>
+<Accordion title="Overlapping Include and Exclude Patterns">
+Exclude filters are applied only after includes; ambiguous patterns may unintentionally filter out desired interfaces or structs. Review your patterns carefully.
+</Accordion>
+<Accordion title="Field Mappings Not Reflected">
+- Confirm that the types used in `FieldTypeMap` and `FieldNameMap` are instances, not just type names.
+- Verify imports are correct and recognized in your config file.
+</Accordion>
+</AccordionGroup>
+
+## 8. Related Examples
+
+### Example: Excluding Nested Interfaces and Structs
+
+```go
+package nested
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+  FileLevel: false,
+  ExcludeInterfaces: []any{"I3"},
+  ExcludeStructs: []any{"S3"},
+}
+```
+
+### Example: Including Only Interfaces Starting with 'Query'
+
+```go
+package pattern
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"Query*"},
+}
+```
+
+<br>
+
+## 9. Next Steps
+
+- After applying custom config, advance to [Running the Generator](../project-bootstrapping/basic-generation-workflow) to produce your tailored output.
+- Use [Validating Generated Code](../project-bootstrapping/quick-usage-validation) to ensure your generation worked as expected.
+- Explore [Writing Query Interfaces & Models](../project-bootstrapping/writing-query-interfaces) for building inputs compatible with your customized generator setup.
+
+---
+
+## References & Resources
+
+- [genconfig.Config Type Definition](https://github.com/go-gorm/cli/blob/main/genconfig/config.go)  
+- [Project Bootstrapping / Writing Query Interfaces](../project-bootstrapping/writing-query-interfaces)  
+- [Overview Feature Quickstart & Configuration](../../overview/features-quicktour/configuration-quickstart)  
+- [Troubleshooting Setup & Installation](../setup-installation/troubleshooting-setup)
+
+---
+
+<TokenizedPath>
+  <Source url="https://github.com/go-gorm/cli" paths='[{"path":"genconfig/config.go","range":"1-62"},{"path":"examples/filters/twolevel/nested/config.go","range":"1-13"},{"path":"examples/filters/pattern/config.go","range":"1-13"}]' />
+</TokenizedPath>
+
+---
+
+<Check>
+Ensure your `config.go` file compiles without errors and is included in your generation input path.
+</Check>
+
+<Note>
+Avoid mixing `Include*` and `Exclude*` filters with overlapping patterns to prevent accidental omissions.
+</Note>
