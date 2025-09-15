@@ -1,0 +1,239 @@
+---
+title: "Basic Configuration & Structure"
+description: "Learn how GORM CLI discovers models and query interfaces, and how your project structure should look for the generator to work effectively. Covers placement of model files, interfaces, and optionally using `genconfig.Config` for initial tweaks."
+---
+
+# Basic Configuration & Structure
+
+Understanding how GORM CLI interacts with your project layout is essential to successfully generate type-safe query APIs and model-driven field helpers. This guide explains how GORM CLI discovers your models and query interfaces in your project structure, and how to configure generation behavior using `genconfig.Config`.
+
+---
+
+## 1. Project Layout for Discovery
+
+GORM CLI requires a clear organization of your Go source files for models and query interfaces within your project directory. Proper structuring ensures the generator can correctly locate the necessary code to produce generated files.
+
+### Key Principles
+
+- **Model Definitions:** Place your model structs in packages or files where they are accessible to the query interfaces.
+- **Query Interfaces:** Define your SQL-annotated interfaces in the same package or subdirectory to maintain coherence.
+- **Generation Output:** By default, generated code will be placed under the `./g` directory, mirroring your input directory structure, unless overridden.
+
+### Recommended Directory Structure Example
+
+```
+myproject/
+├── models/
+│   └── user.go          # Your model structs (e.g., User, Pet)
+├── queries/
+│   ├── query.go          # Query interfaces with SQL annotations
+│   └── genconfig.go      # Optional generation config
+└── main.go
+```
+
+This clean separation helps GORM CLI scan and generate code effectively.
+
+---
+
+## 2. Models: Where and How to Define
+
+- Models are standard Go structs representing database tables.
+- They must be defined and accessible within the same package or reachable from the query interfaces.
+- GORM tags such as `gorm.Model` are commonly used but are not mandatory for code generation.
+
+Example:
+
+```go
+// models/user.go
+package models
+
+import "gorm.io/gorm"
+
+// User represents the users table.
+type User struct {
+  gorm.Model
+  Name string
+  Age  int
+}
+```
+
+---
+
+## 3. Defining Query Interfaces
+
+- Query interfaces are plain Go interfaces whose methods are annotated with SQL templates in comments.
+- These interfaces must be visible to the generator in the scanned directory or package.
+- Use type parameters (`T any`) to support generic queries.
+
+Example:
+
+```go
+// queries/query.go
+package queries
+
+// Query defines queries for any model type T.
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+}
+```
+
+### Notes:
+- SQL annotations in the method comments drive the generator’s SQL template DSL.
+- Declare your models and interfaces in the same package or relate through import paths.
+
+---
+
+## 4. Optional: Using `genconfig.Config` for Customizations
+
+You can define a package-level variable of type `genconfig.Config` to customize generator behavior for the package.
+
+### Supported Configurations include:
+
+- **OutPath:** Override the default output directory for generated code.
+- **FieldTypeMap / FieldNameMap:** Customize field helper mappings.
+- **IncludeInterfaces / ExcludeInterfaces:** Limit which interfaces are processed.
+- **IncludeStructs / ExcludeStructs:** Filter which model structs are generated.
+- **FileLevel:** When true, applies configuration only to the current file; else applies to the whole package.
+
+Example:
+
+```go
+// queries/genconfig.go
+package queries
+
+import ( 
+  "gorm.io/cli/gorm/genconfig" 
+  "gorm.io/cli/gorm/field"
+  "database/sql"
+)
+
+var _ = genconfig.Config{
+  OutPath: "queries/generated",
+  FieldTypeMap: map[any]any{
+    sql.NullTime{}: field.Time{},
+  },
+  IncludeInterfaces: []any{"Query*"},
+}
+```
+
+### How this works:
+- The generator detects this config during scan and applies it when generating files from this package.
+- Allows fine-grained control to adapt generation to complex project layouts.
+
+---
+
+## 5. How GORM CLI Finds and Uses Your Code
+
+When you run the generation command, GORM CLI performs the following steps:
+
+1. **Scan Input Path:** It recursively scans the input directory or file you specify with `-i`.
+2. **Parse Go Files:** It reads the Go files, extracting structs as models and interfaces with SQL method annotations.
+3. **Apply Configuration:** It merges any discovered `genconfig.Config` settings to influence generation behavior.
+4. **Generate Code:** Produces generated `.go` files in the configured output path, reflecting your models and SQL interfaces.
+
+---
+
+## 6. Practical Tips
+
+<AccordionGroup title="Best Practices for Project Structure">
+<Accordion title="Keep Models and Queries Proximate">
+Keep your models and query interfaces in the same or closely nested packages to simplify imports and avoid path issues during code generation.
+</Accordion>
+<Accordion title="Use genconfig.Config Wisely">
+Use the config only when necessary to override defaults; for simple projects default settings usually suffice.
+</Accordion>
+<Accordion title="Use Descriptive Names">
+Name your interfaces starting with `Query` and models with meaningful names to leverage the `IncludeInterfaces` filters effectively.
+</Accordion>
+</AccordionGroup>
+
+
+---
+
+## 7. Example Walkthrough
+
+### Step 1: Define your model in `models/user.go`
+
+```go
+package models
+
+import "gorm.io/gorm"
+
+type User struct {
+  gorm.Model
+  Name string
+  Age  int
+}
+```
+
+### Step 2: Write your query interface in `queries/query.go`
+
+```go
+package queries
+
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+}
+```
+
+### Step 3: Optionally add a `genconfig.Config` in `queries/genconfig.go`
+
+```go
+package queries
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+  OutPath: "queries/generated",
+}
+```
+
+### Step 4: Run the generator
+
+```bash
+gorm gen -i ./queries -o ./generated
+```
+
+Generated code will appear under `./generated`, reflecting your models and the `GetByID` query method.
+
+---
+
+## 8. Troubleshooting
+
+<AccordionGroup title="Common Issues in Project Layout">
+<Accordion title="Generated Code Not Found or Empty">
+Ensure your interfaces include the SQL annotations in method comments. Without SQL templates, generation will skip methods.
+</Accordion>
+<Accordion title="Errors About Interface or Model Not Found">
+Check your include/exclude filters in `genconfig.Config`. Ensure the interfaces and structs are included in the generation scope.
+</Accordion>
+<Accordion title="Output Files in Unexpected Locations">
+Verify the `OutPath` in your config or CLI command; it controls where generated files are placed relative to your project.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 9. Next Steps
+
+After establishing a solid configuration and project layout, proceed to:
+
+- [Running Code Generation](getting-started/project-configuration-run/generation-cli-commands) to learn CLI usage in detail.
+- [Validating Generated APIs](getting-started/project-configuration-run/validating-generated-code) to ensure your generated code works as expected.
+- Explore [Quickstart: Your First Workflow](getting-started/project-configuration-run/quickstart-overview) for a full end-to-end practical guide.
+
+---
+
+# Additional Resources
+
+- See the [README.md](README.md) for comprehensive usage examples and feature details.
+- Explore the [genconfig.Config](genconfig/config.go) details for advanced configuration capabilities.
+
+---
+
+This foundational understanding will empower you to set up your GORM CLI project efficiently and unlock its powerful generation capabilities tailored to your workflow.
