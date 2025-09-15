@@ -1,0 +1,293 @@
+---
+title: "Associations Model & Semantics"
+description: "Review GORM CLI’s deep support for associations (has one, has many, belongs to, many2many, polymorphic). Discover the underlying semantics and API contracts for Create, Update, Unlink, and Delete operations on associations—mapping to both GORM and SQL-level behaviors."
+---
+
+# Associations Model & Semantics
+
+Explore GORM CLI's comprehensive support for database associations, covering **has one**, **has many**, **belongs to**, **many to many**, and **polymorphic** relationships. This guide clarifies how these association types map to GORM and SQL behaviors, detailing the API contracts for association operations such as **Create**, **Update**, **Unlink**, and **Delete**.
+
+---
+
+## Understanding Associations in GORM CLI
+
+Associations form the core of relational data modeling. GORM CLI generates rich, type-safe **association field helpers** for all supported association types to enable fluent, compile-time checked CRUD and relationship management.
+
+These helpers appear as:
+- `field.Struct[T]` for single-valued associations (e.g., has one, belongs to)
+- `field.Slice[T]` for multi-valued associations (e.g., has many, many to many)
+
+### Key Association Types
+
+| Association Type | Description                                        | Cardinality        | FK Location                      | Polymorphic Support |
+|------------------|--------------------------------------------------|--------------------|---------------------------------|---------------------|
+| Has One          | Parent owns a single child                        | One-to-One         | Foreign key on child            | Yes                 |
+| Has Many         | Parent owns multiple children                     | One-to-Many        | Foreign key on children         | Yes                 |
+| Belongs To       | Child references a parent                         | Many-to-One        | Foreign key on child (parent ID)| No                  |
+| Many to Many     | Both sides linked through a join table           | Many-to-Many       | Join table                      | No                  |
+| Polymorphic      | Association to multiple models by type discriminator | One-to-One or One-to-Many | FK and Type fields on child | Yes                 |
+
+---
+
+## API Contracts for Association Operations
+
+GORM CLI generated association helpers support these core operations, typically used inside a fluent chain with `Set(...)` followed by `Create(ctx)` or `Update(ctx)`:
+
+| Operation   | Purpose                                                   | Effect on Database                                                         |
+|-------------|-----------------------------------------------------------|---------------------------------------------------------------------------|
+| **Create**       | Create and associate new records with matched parents    | Inserts new rows; sets/updates FK fields or join table entries            |
+| **CreateInBatch**| Batch create/link multiple associated records            | Inserts multiple rows linked to each matched parent                       |
+| **Update**       | Update existing associated records matching conditions   | Updates matched children or associated join entries                       |
+| **Unlink**       | Remove link without deleting associated rows             | Clears FK fields or removes join table rows but keeps associated records  |
+| **Delete**       | Delete associated rows or join entries                     | Deletes child rows or join rows but may keep referenced side rows (many2many) |
+
+
+## Association Semantics & Behaviors
+
+### Has One
+
+- The child table contains the foreign key pointing back to the parent.
+- **Create:** Creates one child record for each matched parent with FK linking it.
+- **Update:** Updates the linked child record(s) optionally filtered by child conditions.
+- **Unlink:** Sets the foreign key on the child to NULL, effectively disconnecting the child.
+- **Delete:** Deletes the linked child record(s).
+
+### Has Many
+
+- Children table contains the foreign key referencing the parent.
+- **Create:** Creates one child record per matched parent.
+- **CreateInBatch:** Creates multiple child records linked to each parent.
+- **Update:** Updates child records matching optional child conditions.
+- **Unlink:** Sets children FK fields to NULL, detaching them.
+- **Delete:** Deletes the child records.
+
+### Belongs To
+
+- The parent pointer resides on the child; typically the FK exists on the child.
+- **Update:** Updates the referenced parent records.
+- **Unlink:** Sets parent's FK field on the child to NULL.
+- **Delete:** Deletes linked parent records.
+
+### Many to Many
+
+- Both entities linked through a join table.
+- **Create:** Creates and inserts join table rows linking new or existing associated records.
+- **CreateInBatch:** Batch inserts multiple join entries.
+- **Update:** Updates associated records, not join rows.
+- **Unlink:** Removes join table rows matching conditions but keeps the associated entities.
+- **Delete:** Removes join table rows but leaves associated rows intact.
+
+### Polymorphic
+
+- Children are linked via paired columns: `OwnerID` and `OwnerType`.
+- **Create:** Creates the child with polymorphic FK and type set.
+- **Update:** Updates the child rows filtered on polymorphic owner conditions.
+- **Unlink:** Zeros out the polymorphic FK fields, unlinking but keeping rows.
+- **Delete:** Deletes the associated polymorphic rows.
+
+---
+
+## Practical Examples
+
+Below are typical usage patterns leveraging the generated association helpers for common real-world operations.
+
+### Creating and Linking Associations
+
+```go
+// Create a new User with one Pet (has many)
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(
+      generated.Pet.Name.Set("fido"),
+    ),
+  ).
+  Create(ctx)
+
+// Batch create multiple Languages and link to User (many2many)
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+  ).
+  Update(ctx)
+
+// Create one Pet record for each matched User (has many)
+gorm.G[User](db).
+  Where(generated.User.ID.In(1,2)).
+  Set(
+    generated.User.Pets.Create(
+      generated.Pet.Name.Set("buddy"),
+    ),
+  ).
+  Update(ctx)
+```
+
+### Updating Associations Conditionally
+
+```go
+// Change Pet name where it matches 'fido'
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(
+      generated.Pet.Name.Set("rex"),
+    ),
+  ).
+  Update(ctx)
+
+// Update Company name associated with a User (belongs to)
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Company.Where(generated.Company.Name.Eq("Acme")).Update(
+      generated.Company.Name.Set("NewCo"),
+    ),
+  ).
+  Update(ctx)
+```
+
+### Unlinking Associations
+
+```go
+// Unlink all Pets from user, clearing FK (has many)
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Unlink(),
+  ).
+  Update(ctx)
+
+// Unlink Company from user (belongs to), setting user.CompanyID = NULL
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Company.Unlink(),
+  ).
+  Update(ctx)
+
+// Remove link to Languages in many2many join table
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Languages.Where(generated.Language.Code.Eq("EN")).Unlink(),
+  ).
+  Update(ctx)
+```
+
+### Deleting Associations
+
+```go
+// Delete Pets matching condition
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("old")).Delete(),
+  ).
+  Update(ctx)
+
+// Delete join rows only for many2many Languages association, keeping Language rows
+gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Languages.Where(generated.Language.Code.Eq("EN")).Delete(),
+  ).
+  Update(ctx)
+```
+
+---
+
+## Association Operation Summary
+
+| Association Type | Create Links | CreateInBatch Support | Update Associated | Unlink Semantics                    | Delete Semantics                 |
+|------------------|--------------|----------------------|-------------------|-----------------------------------|---------------------------------|
+| Has One          | Single       | No                   | Yes               | Sets child's FK NULL              | Deletes child row               |
+| Has Many         | Single       | Yes                  | Yes               | Sets children's FK NULL          | Deletes child rows              |
+| Belongs To       | Single       | No                   | Yes               | Sets parent's FK NULL on child   | Deletes parent row              |
+| Many to Many     | Single       | Yes                  | Yes               | Removes join table rows          | Removes join table rows only    |
+| Polymorphic      | Single       | No                   | Yes               | Zeros out polymorphic FK fields  | Deletes polymorphic child rows |
+
+---
+
+## Practical Tips & Best Practices
+
+- **Set Conditions Carefully:** When updating, unlinking, or deleting associations, always refine conditions using `.Where(...)` to avoid broad data modifications.
+- **Distinguish Unlink vs Delete:** Use `Unlink()` to disassociate records but keep them, and `Delete()` to remove associated records or join entries.
+- **Batch Operations:** Prefer `CreateInBatch()` for creating multiple related records efficiently in has many or many to many.
+- **Polymorphic FK:** For polymorphic associations, remember that unlinking zeroes both `OwnerID` and `OwnerType` fields.
+- **Foreign Key Awareness:** Understand which side owns the foreign key to prevent unintended updates or invalid references.
+
+---
+
+## Association Usage Flow Diagram
+
+```mermaid
+flowchart TD
+  ParentModel["Parent Model Instance"] -->|Create Association via Set().Create(ctx)| GenHelpers_Create["Generated Association Helper: Create"]
+  ParentModel -->|CreateInBatch for batch ops| GenHelpers_CreateBatch["CreateInBatch (HasMany/Many2Many)"]
+
+  ParentModel -->|Update associated records| GenHelpers_Update["Update with optional Where conditions"]
+
+  ParentModel -->|Unlink association| GenHelpers_Unlink["Unlink (Clear FK or remove join rows)"]
+
+  ParentModel -->|Delete association| GenHelpers_Delete["Delete associated records or joins"]
+
+  GenHelpers_Create --> TargetDB["Insert linked child records, set FK"]
+  GenHelpers_CreateBatch --> TargetDB
+  GenHelpers_Update --> TargetDB["Update child tables or join tables"]
+  GenHelpers_Unlink --> TargetDB["Set FK NULL or delete join rows"]
+  GenHelpers_Delete --> TargetDB["Delete child or join table rows"]
+
+  style ParentModel fill:#E0F7FA,stroke:#00796B,stroke-width:2px
+  style TargetDB fill:#FFE0B2,stroke:#F57C00,stroke-width:2px
+```
+
+---
+
+## Conclusion
+
+GORM CLI's generated association helpers provide a powerful, type-safe interface to manage all common relational patterns in GORM projects. Understanding the specific semantics and mapping of **Create**, **Update**, **Unlink**, and **Delete** operations for each association type empowers you to build complex relational data workflows with confidence and clarity.
+
+For deeper insight, review the example tests in `examples/output/models_relations_test.go` showcasing end-to-end usage.
+
+---
+
+## See Also
+
+- [Using Generated APIs in Real Projects](../../guides/core-workflows/using-generated-apis.mdx) — practical workflows with generated code
+- [Best Practices for Working with Associations](../../guides/advanced-features-patterns/association-operations.mdx) — detailed operational guidance
+- [Model-Driven Field Helpers](../../concepts/core-concepts/field-helpers.mdx) — underpinning field helper concepts
+- [Query Interfaces & SQL Templates](../../concepts/core-concepts/query-interfaces.mdx) — writing query interfaces and templates
+- [Architecture Overview](../../overview/architecture-concepts/architecture-overview.mdx) — high-level insight into GORM CLI
+
+---
+
+## Troubleshooting Common Association Issues
+
+<AccordionGroup title="Troubleshooting Association Operations">
+<Accordion title="Why does Unlink not delete associated records?">
+Unlink is designed to only remove the association link, such as setting foreign keys to NULL or deleting join table rows. The associated records remain intact by design to prevent unintentional data loss. Use Delete() when wanting to remove associated records.
+</Accordion>
+<Accordion title="How to safely update association records?">
+Always use `.Where(...)` on the association helper to narrow down updates to specific associated rows. Omitting the condition will update all associated records for the matched parents.
+</Accordion>
+<Accordion title="Problems with foreign key nullification during Unlink">
+Ensure the association mapping is configured properly in GORM models and that the foreign key fields are nullable if you plan to unlink rather than delete.
+</Accordion>
+<Accordion title="Batch association creation unexpected results">
+Check that the batch slice records are correctly populated and that the related foreign keys or join table particulars (e.g., many2many join keys) are correctly set or inferred by GORM.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Additional Resources
+
+- Explore the [source code for association helpers](https://github.com/go-gorm/cli/blob/main/field/association.go) for internal mechanisms.
+- Review [examples/models/user.go](../../examples/models/user.go) for models demonstrating complex associations.
+- Comprehensive association tests: [models_relations_test.go](../../examples/output/models_relations_test.go).
+
+---
+
+*Harness these association semantics to deliver robust, type-safe relational data management in your Go GORM projects.*
+
