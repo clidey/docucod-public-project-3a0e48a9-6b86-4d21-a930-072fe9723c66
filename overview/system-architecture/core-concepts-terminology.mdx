@@ -1,228 +1,262 @@
 ---
 title: "Core Concepts & Terminology"
-description: "Get familiar with the most important concepts: query API interfaces, SQL template comments, field helpers, association operations, configuration points (like genconfig.Config), and their specific meanings within the GORM CLI ecosystem. Learn domain terms you’ll encounter throughout the documentation and code."
+description: "Establish a shared mental model by defining GORM CLI’s primary terms: Query Interfaces, Field Helpers, Association Operations, Templates/SQL DSL, and Configurations. Internalize how these concepts relate and how they map to Go structures and workflows."
 ---
 
 # Core Concepts & Terminology
 
-Welcome to the foundational guide on GORM CLI’s core concepts and terminology. This page helps you understand the critical building blocks and domain-specific language you will encounter as you use the GORM CLI ecosystem for generating type-safe query APIs and model-driven field helpers. By mastering these concepts early, you can navigate the documentation and code with confidence and unlock the full productivity gains of GORM CLI.
+Welcome to the foundational guide that anchors your understanding of GORM CLI by defining its core concepts and terminology. This page is your shared mental model, clarifying essential terms, their interrelations, and how they map naturally to Go structures and workflows.
 
 ---
 
-## Understanding the Core Domain of GORM CLI
+## Understanding GORM CLI's Core Components
 
-At its heart, GORM CLI enables Go developers to generate fluent, type-safe database access code by combining *query API interfaces*, *model structs*, and customizable *configuration points*. It produces two powerful outputs:
+GORM CLI streamlines working with GORM-based projects in Go by generating type-safe, idiomatic query APIs and structured field helpers from your code. Below we break down its critical concepts to help you internalize their purpose and usage.
 
-- **Query API Interfaces:** User-written Go interfaces annotated with SQL templates defining your data-access queries.
-- **Model-Driven Field Helpers:** Generated helpers from your GORM model structs that empower safe, expressive filters, updates, and association management.
+### 1. Query Interfaces
 
-### Why These Concepts Matter
+**What they are:**
 
-Each concept encapsulates user intent and usage patterns in GORM CLI-generated code. Understanding these components lets you write effective query templates, configure generation precisely, and leverage association operations without confusion.
+User-defined Go interfaces with methods that include SQL templates within their comments.
+
+**Purpose:**
+
+- Define your database queries declaratively, using embedded templated SQL inside interface method comments.
+- Automatically generate type-safe query methods that bind Go parameters to SQL safely.
+
+**How it fits:**
+
+These interfaces serve as the starting point for GORM CLI’s code generation of query APIs. Methods in these interfaces represent operations you want your application to perform, such as selecting, filtering, or updating data.
+
+**Example:**
+
+```go
+// Query defines user-related data access methods
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // UPDATE @@table
+  // {{set}}
+  //   {{if user.Name != ""}} name=@user.Name, {{end}}
+  //   {{if user.Age > 0}} age=@user.Age, {{end}}
+  // {{end}}
+  // WHERE id=@id
+  UpdateInfo(user User, id int) error
+}
+```
+
+> **Tip:** All method parameters are automatically bound safely into SQL templates, preventing injection and improving readability.
+
+### 2. Field Helpers
+
+**What they are:**
+
+Generated strongly typed field references corresponding to your Go model structs and their database columns and associations.
+
+**Purpose:**
+
+- Provide fluent, discoverable, and type-safe ways to build complex GORM queries and updates.
+- Abstract away raw column names with methods like `.Eq()`, `.In()`, `.Like()`, and update setters.
+
+**How it fits:**
+
+They complement query interfaces by helping you construct filters, conditions, and update statements without raw strings.
+
+**Example:**
+
+```go
+// Filter users whose age is between 18 and 65
+users, err := gorm.G[User](db).Where(
+  generated.User.Age.Between(18, 65),
+).Find(ctx)
+
+// Update a user's name
+err = gorm.G[User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Name.Set("alice")).
+  Update(ctx)
+```
+
+**Associations:**
+
+Field helpers also empower association operations like creating, updating, unlinking, or deleting related entities (has one, has many, belongs to, many2many).
 
 ---
 
-## Key Concepts Explained
+### 3. Association Operations
 
-### 1. Query API Interfaces
+**What they are:**
 
-**What Are They?**
+Specialized operations on linked records expressed via field helpers for model relationships.
 
-- Go interfaces where each method includes an SQL template as a comment.
-- Methods define parameterized SQL queries, providing an interface-driven way to express custom queries.
+**Capabilities:**
 
-**Why Use Them?**
+- **Create / CreateInBatch:** Insert new rows and link them to the parent.
+- **Update:** Modify fields of associated rows with conditions.
+- **Unlink:** Remove foreign key references or join table rows without deleting actual records.
+- **Delete:** Remove associated rows or join rows from many2many relations.
 
-- They generate type-safe, concrete implementations eliminating manual boilerplate.
-- Provide compile-time validation, ensuring queries match method signatures.
+**How it fits:**
 
-**Core Elements:**
+These operations let you manipulate related data safely and conveniently within the same update or create context.
 
-- Placeholders like `@@table` (resolved to table name) and `@param` (binding Go parameters).
-- Template directives like `{{where}}`, `{{set}}`, and `{{if}}` to build dynamic SQL clauses.
+**Practical example:**
+
+```go
+// Create a user with one pet
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+```
+
+---
+
+### 4. Templates and SQL DSL
+
+**What it is:**
+
+A domain-specific language embedded in Go interface method comments for writing SQL templates.
+
+**Purpose:**
+
+- Express dynamic SQL queries compactly with placeholders.
+- Leverage directives like `@@table` (model's table name), `@@column` (dynamic column), `@param` (parameter placeholder), and control flow tags `{{if}}`, `{{for}}`, `{{where}}`, and `{{set}}`.
+
+**Why it matters:**
+
+- Write expressive, reusable, and safe SQL snippets directly tied to your Go method signatures.
+- GORM CLI processes these templates to generate Go code that executes queries efficiently.
 
 **Example:**
 
-```go
-// SELECT * FROM @@table WHERE id=@id
-GetByID(id int) (T, error)
+```sql
+SELECT * FROM @@table
+{{where}}
+  {{if user.Name != ""}} name=@user.Name {{end}}
+  {{if user.Age > 0}} AND age=@user.Age {{end}}
+{{end}}
 ```
 
-### 2. SQL Template Comments
+**Key DSL directives:**
 
-- Placed directly above interface methods, these are parsed by the generator.
-- Use GORM CLI's SQL Template DSL featuring `@@table`, `@@column`, `@param`, `{{where}}`, `{{set}}`, and more.
-- Allow dynamic, conditional, or iterative SQL generation based on method parameters.
+| Directive  | Description                          | Example
+|------------|------------------------------------|----------------------------
+| `@@table`  | Model table name substitution       | `SELECT * FROM @@table`
+| `@@column` | Dynamic column name                  | `WHERE @@column=@value`
+| `@param`   | Bind method parameters              | `WHERE name=@user.Name`
+| `{{where}}`| Conditional WHERE clause            | `{{where}} age > 18 {{end}}`
+| `{{set}}`  | Conditional UPDATE SET clause       | `{{set}} name=@name {{end}}`
+| `{{if}}`   | Conditional SQL fragment            | `{{if x > 0}} AND age=@x {{end}}`
+| `{{for}}`  | Loop over collection                | `{{for _, t := range tags}} ... {{end}}`
 
-**Practical Tip:** Write clear, parameterized templates to fully leverage type safety.
+---
 
-### 3. Field Helpers
+### 5. Configurations (genconfig.Config)
 
-**Definition:**
+**What it is:**
 
-- Generated from your GORM models, field helpers provide strongly typed methods representing columns and associations.
-- Enable concise expressions for filters (`Eq`, `Gt`, `Between`), updates (`Set`, `SetExpr`), and conditional matching.
+A user-declared Go variable for customizing code generation in a package.
 
-**Benefit:**
+**Capabilities:**
 
-- Avoid SQL or string-based queries manually.
-- Ensure you use correct field names and types, catching issues at compile time.
+- Specify output folders for generated files.
+- Map Go types to specific field helper types.
+- Include or exclude interfaces and structs by patterns.
+- Control granularity, such as file-level or package-level generation.
 
-**Types of Fields:**
+**How it fits:**
 
-- Basic fields: int, string, bool, time, sql.Null* types, with extensions for JSON via custom helpers.
-- Associations: represented as struct or slice types such as `field.Struct[T]`, `field.Slice[T]` for linked models.
-
-**Example:**
-
-```go
-generated.User.Age.Gt(18)              // age > 18
-generated.User.Name.Like("%jinzhu%") // name LIKE '%jinzhu%'
-```
-
-### 4. Association Operations
-
-GORM CLI models capture relationships between entities (has one, has many, belongs to, many2many, polymorphic). The generator provides helpers supporting these operations with compile-time safety:
-
-- **Create:** Insert and link new associated rows automatically.
-- **CreateInBatch:** Batch insert multiple linked rows.
-- **Update:** Update associated rows conditionally.
-- **Unlink:** Remove links by setting foreign keys to NULL or deleting join table rows (without deleting data).
-- **Delete:** Delete associated rows or join rows for many2many.
-
-**Semantics vary by association type:**
-
-| Association   | Unlink Behavior                          | Delete Behavior                         |
-|---------------|-----------------------------------------|---------------------------------------|
-| belongs to    | Sets FK on parent to NULL                | Removes associated rows                |
-| has one/many  | Sets FK on child to NULL                | Removes child rows                     |
-| many2many     | Deletes join rows only                   | Deletes join rows only                 |
-
-**Example:**
-
-```go
-// Create user with pets attached
-gorm.G[User](db).Set(
-  generated.User.Name.Set("alice"),
-  generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
-).Create(ctx)
-```
-
-### 5. Configuration Points (`genconfig.Config`)
-
-**What is it?**
-
-- A Go struct users declare in their packages/directories to customize code generation behavior.
-
-**Use Cases:**
-
-- Control output paths.
-- Include/exclude interfaces and structs by pattern or type.
-- Customize field type mappings (e.g., mapping `sql.NullTime` to a `Time` helper).
-- Configure custom field naming rules (map struct tags to custom helpers).
-- Set generation to file-level or package-level granularities.
+The generator reads this config automatically to adjust its behavior, enabling tailored workflows.
 
 **Example:**
 
 ```go
 var _ = genconfig.Config{
   OutPath: "examples/output",
-  IncludeInterfaces: []any{"Query*"},
-  ExcludeStructs: []any{"*DTO"},
   FieldTypeMap: map[any]any{
-    sql.NullTime{}: field.Time{},
+    sql.NullTime{}: field.Time{},  // map sql.NullTime to Time field helper
   },
+  IncludeInterfaces: []any{"Query*"},
+  IncludeStructs: []any{"User", models.User{}},
 }
 ```
 
 ---
 
-## Domain Terms You’ll Encounter
-
-| Term               | Meaning                                                  |
-|--------------------|----------------------------------------------------------|
-| `@@table`          | Placeholder replaced by the current model's table name   |
-| `@@column`         | Placeholder replaced by a column name (dynamic binding)  |
-| `@param`           | Parameter binding from Go method argument                |
-| `{{where}}`        | Template directive for conditional WHERE clauses         |
-| `{{set}}`          | Template directive for conditional SET (UPDATE) clauses  |
-| Field Helper       | Generated struct methods representing model fields       |
-| Associations       | Relationships between models (has one/many, belongs to)  |
-| `CreateInBatch`    | Batch link-create operation for associations              |
-| `Unlink`           | Operation to clear foreign key relations                  |
-| `genconfig.Config` | Generation configuration struct to customize CLI output |
-
----
-
-## How These Concepts Fit Together
-
-1. You **define your Go models** — including relationships and special struct tags.
-2. You **write query API interfaces**, using SQL templates for method definitions.
-3. Optionally, you **configure the generator** using `genconfig.Config` to control what and how code is generated.
-4. GORM CLI **generates query implementations** and *field helpers* for models.
-5. In your application, you use the **generated query APIs and field helpers** to write fluent, safe database access code.
-
----
-
-## Practical Tips & Best Practices
-
-- **Use descriptive names** for interfaces and methods reflecting your query intent.
-- **Take advantage of configuration** to include only relevant interfaces/structs and to map custom types.
-- **Leverage association helpers carefully**, using `Unlink` and `Delete` with awareness of relation semantics.
-- **Keep SQL templates succinct and use conditional directives** to avoid verbose repetitive queries.
-- **Refer to the User model example** in `examples/models/user.go` to understand complex associations and polymorphic relations.
-
----
-
-## Troubleshooting & Common Gotchas
-
-- If generated methods do not match expected signatures, verify SQL templates and parameter bindings.
-- Using `CreateInBatch` requires batch slices of correct model types.
-- Polymorphic associations require proper GORM struct tags (`polymorphic:Owner`), else helpers won’t generate accurately.
-- Configurations inconsistently applied? Check if you declared `genconfig.Config` at package or file level.
-
----
-
-## Visual Overview of Concepts and Relationships
+## How These Concepts Connect in Your Development Workflow
 
 ```mermaid
-graph TD
-  UserModel["User Model Struct"]
-  Associations["Association Helpers & Operations"]
-  QueryAPI["Query API Interfaces with SQL Templates"]
-  FieldHelpers["Model-driven Field Helpers"]
-  GenConfig["Generation Config (genconfig.Config)"]
-  GeneratedCode["Generated Query Implementations & Helpers"]
-  ApplicationCode["Your Application Code"]
+flowchart TD
+  A[Define Go Models (Structs)] --> B[Configure genconfig.Config]
+  B --> C[Write Query Interfaces with SQL DSL]
+  C --> D[Run GORM CLI Code Generator]
+  D --> E[Generated Query APIs & Field Helpers]
+  E --> F[Use Generated Code in your Project]
 
-  UserModel --> FieldHelpers
-  UserModel --> Associations
-  QueryAPI --> GeneratedCode
-  FieldHelpers --> GeneratedCode
-  Associations --> GeneratedCode
-  GenConfig --> GeneratedCode
-  GeneratedCode --> ApplicationCode
+  style A fill:#e3f6f5,stroke:#069,stroke-width:2px
+  style B fill:#dcfcee,stroke:#35b569,stroke-width:2px
+  style C fill:#eafff5,stroke:#3d9970,stroke-width:2px
+  style D fill:#f0f0f0,stroke:#aaa,stroke-width:2px,stroke-dasharray: 5 5
+  style E fill:#d0f0d0,stroke:#228822,stroke-width:2px
+  style F fill:#b0ddb0,stroke:#005500,stroke-width:2px
 
-  classDef concept fill:#e3f6fc,stroke:#0a7dda,stroke-width:2px,border-radius:5px
-  class UserModel,Associations,QueryAPI,FieldHelpers,GenConfig,GeneratedCode,ApplicationCode concept
+  classDef dashed stroke-dasharray: 5 5;
+  D:::dashed
 ```
 
----
+**Why this model matters:**
 
-## Next Steps
-
-- Explore [Model-Driven Field Helpers](https://docs.gorm.io/concepts/data-models-and-templates/model-driven-field-helpers) to deepen your use of generated fields.
-- Learn to write effective [Template-based Query APIs](https://docs.gorm.io/guides/essential-workflows/template-based-query-apis).
-- Review customization options in [Configuring Code Generation](https://docs.gorm.io/concepts/configuration-and-extensibility/configuring-generation).
-
----
-
-This foundational knowledge empowers you to read the rest of the GORM CLI documentation with clarity and confidence. The cohesive terminology and concepts here are your map to fluent data layer automation with GORM CLI.
+- Your Go structs define the data shape.
+- The config controls generation specifics.
+- Query interfaces express the intended database operations safely.
+- Generation translates this into efficient, type-safe APIs
+- You consume generated code to streamline database work with clarity and safety.
 
 ---
 
-For concrete usage examples, see `examples/models/user.go` and `examples/query.go` in the source repository.
+## Best Practices and Tips
+
+- **Start with your data models:** Ensure model structs are well-defined with necessary struct tags.
+- **Write clear query interfaces:** Use concise SQL with templating for maintainability.
+- **Leverage field helpers:** Always use generated field helpers rather than raw strings to avoid typos and injection risks.
+- **Customize generation via config:** Tailor the generator with `genconfig.Config` for your project’s needs.
+- **Handle associations carefully:** Use association helpers to safely manage related records preventing foreign key mismatch or orphaned data.
+
+## Troubleshooting Common Questions
+
+<AccordionGroup title="Common Questions about Core Concepts">
+<Accordion title="Why use interfaces with SQL template comments?">
+This approach combines the expressiveness of raw SQL with the safety, discoverability, and ergonomics of generated code. It ensures queries are clear, maintainable, and type-checked at compile time.
+</Accordion>
+<Accordion title="What if my models have complex associations?">
+GORM CLI generates helpers that mirror even complex relationships such as polymorphic associations, many-to-many, has-one, and belongs-to, enabling safe and fluent operations.
+</Accordion>
+<Accordion title="Can I customize field helper types for special columns?">
+Yes. Use `genconfig.Config` to map custom Go types or struct tags (like JSON fields) to specialized field helpers for optimized query expressions.
+</Accordion>
+<Accordion title="How does GORM CLI relate to the standard GORM?">
+GORM CLI generates code that builds on top of GORM’s APIs, augmenting them with type safety and convenient field helpers without replacing core GORM functionality.
+</Accordion>
+</AccordionGroup>
 
 ---
 
-*End of Core Concepts & Terminology*
+By mastering these core concepts and terminology, you'll have a shared framework to effectively use GORM CLI's powerful code generation capabilities, accelerating your Go development with GORM.
+
+---
+
+For a broader view, consider exploring the following related documentation pages:
+
+- [What is GORM CLI?](../product-intro/what-is-gorm-cli)
+- [Key Benefits and Use Cases](../product-intro/benefits-use-cases)
+- [Architecture Overview](../system-architecture/architecture-diagram)
+- [Quickstart Guide for Generating APIs](../../guides/getting-started/quickstart-generate-apis)
+
+---
