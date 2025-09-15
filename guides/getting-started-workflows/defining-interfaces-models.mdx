@@ -1,0 +1,274 @@
+---
+title: "Defining Query Interfaces & Models"
+description: "Step-by-step guidance on writing Go interfaces with SQL templates and struct models that serve as the foundation for code generation. Discover best practices for aligning your domain logic with GORM CLI’s type-safe workflows."
+---
+
+# Defining Query Interfaces & Models
+
+## 1. Introduction
+This guide walks you through the crucial first step of using GORM CLI: writing Go interfaces with SQL templates alongside your struct models. These interfaces and models form the foundation of the code generation process, enabling you to unlock type-safe, fluent database operations. You'll learn practical patterns and best practices to align your domain logic smoothly with GORM CLI’s workflows.
+
+---
+
+## 2. Workflow Overview
+
+### Task Description
+Create Go interface definitions that embed SQL queries as comments and struct models that represent your database schema. This setup enables GORM CLI to generate strongly typed query APIs and field helpers, making your database interactions safe and expressive.
+
+### Prerequisites
+- Go 1.18+ installed and set up
+- Basic familiarity with Go interfaces and struct types
+- Your project initialized with GORM models
+- GORM CLI installed and accessible (`gorm` command)
+
+### Expected Outcome
+- Well-defined Go interfaces with embedded SQL templates ready for generation
+- Struct models annotated or structured to represent your tables and fields
+- Understanding how to use GORM CLI’s template DSL within interfaces
+
+### Time Estimate
+15-30 minutes to write initial interfaces and models
+
+### Difficulty Level
+Beginner to Intermediate
+
+---
+
+## 3. Step-by-Step Instructions
+
+### Step 1: Define Your Struct Models
+Start by declaring Go struct types representing your database tables. Include standard Go field types and GORM annotations where relevant.
+
+```go
+package models
+
+import (
+	"database/sql"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// User model example with various field types and relations
+// Tags & gen annotations guide code generation
+
+type User struct {
+	gorm.Model
+	Name      string
+	Age       int
+	Birthday  *time.Time
+	Score     sql.NullInt64
+	LastLogin sql.NullTime
+	Role      string
+	IsAdult   bool   `gorm:"column:is_adult"`
+	Profile   string `gen:"json"`
+
+	Account   Account
+	Pets      []*Pet
+	Languages []Language `gorm:"many2many:UserSpeak"`
+}
+
+// Related structs
+
+type Account struct {
+	gorm.Model
+	UserID sql.NullInt64
+	Number string
+}
+
+// Continue defining related structs...
+```
+
+> **Tip:** Use tags like `gen:"json"` to employ custom field helpers (see JSON field mapping in configuration).
+
+### Step 2: Write Query Interfaces Using SQL Templates
+Define Go interfaces with generic type parameters where each method includes a comment containing SQL or SQL templates. Place the SQL query directly in the method comment, using GORM CLI's template DSL.
+
+```go
+package examples
+
+import (
+	"time"
+
+	"gorm.io/cli/gorm/examples/models"
+)
+
+type Query[T any] interface {
+	// SELECT * FROM @@table WHERE id=@id
+	GetByID(id int) (T, error)
+
+	// where("name=@name AND age=@age")
+	FilterByNameAndAge(name string, age int)
+
+	// SELECT * FROM @@table
+	// {{where}}
+	//   {{if user.Name != ""}} name=@user.Name {{end}}
+	//   {{if user.Age > 0}} AND age=@user.Age {{end}}
+	// {{end}}
+	SearchUsers(user models.User) ([]T, error)
+
+	// UPDATE @@table
+	// {{set}}
+	//   {{if user.Name != ""}} name=@user.Name, {{end}}
+	//   {{if user.Age > 0}} age=@user.Age, {{end}}
+	//   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+	// {{end}}
+	// WHERE id=@id
+	UpdateUser(user models.User, id int) error
+}
+```
+
+> **Note:**
+> - The prefixes `@@table` and `@@column` resolve to the model table/column names.
+> - Use `@param` to bind Go method parameters to SQL placeholders.
+> - DSL directives like `{{where}}`, `{{set}}`, `{{if}}`, and `{{for}}` enable conditional SQL generation.
+
+### Step 3: Follow Naming and Signature Conventions
+- Method names should be descriptive and camel-cased.
+- Include `context.Context` as the first parameter or omit it—the generator will add it automatically.
+- Return types must include the data type (generic `T` or slice) along with `error`.
+- Methods that are finishing operations returning data require appropriate return signatures; methods that chain queries return typed interfaces.
+
+### Step 4: Organize Interfaces and Models
+- Place related query interfaces and models within the same package or directory for automatic detection.
+- Optionally, use package-level `genconfig.Config` to include/exclude specific interfaces or structs from generation.
+
+```go
+package examples
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+	IncludeInterfaces: []any{"Query*"},
+}
+```
+
+### Step 5: Validate Your Interface Definitions
+Before running code generation, verify that:
+- All SQL queries are valid and use the template directives correctly.
+- Methods have proper parameter and return signatures.
+- Struct fields use correct GORM tags and optional custom tags (`gen` for custom helpers).
+
+---
+
+## 4. Practical Examples
+
+### Example: Interface With Multiple SQL Templates
+
+```go
+// UserQuery defines user-related queries
+
+type UserQuery[T any] interface {
+	// SELECT * FROM @@table WHERE id=@id
+	GetByID(id int) (T, error)
+
+	// SELECT * FROM @@table
+	// {{where}}
+	//   {{if role != ""}} role=@role {{end}}
+	//   {{if age > 0}} AND age >= @age {{end}}
+	// {{end}}
+	FilterUsers(role string, age int) ([]T, error)
+
+	// UPDATE @@table
+	// {{set}}
+	//   {{if name != ""}} name=@name, {{end}}
+	//   is_adult=@isAdult
+	// {{end}}
+	// WHERE id=@id
+	UpdateUserInfo(name string, isAdult bool, id int) error
+}
+```
+
+### Example: Struct Model with Relations
+
+```go
+type User struct {
+	ID       uint
+	Name     string
+	Age      int
+	Profile  string `gen:"json"`
+	Pets     []Pet
+}
+
+type Pet struct {
+	ID     uint
+	Name   string
+	UserID uint
+}
+```
+
+---
+
+## 5. Tips & Best Practices
+
+- **Keep Interfaces Focused:** Each query interface should relate to a specific domain or entity.
+- **Use Generics Consistently:** The `[T any]` generic pattern ensures type safety and flexible reuse.
+- **Leverage Template DSL:** Use `{{where}}` and `{{set}}` to build dynamic queries that reflect optional filters or updates.
+- **Annotate Models Clearly:** Use GORM tags and custom `gen` tags to guide field helper generation.
+- **Use Config to Control Generation:** If your package contains multiple interface types, use `genconfig.Config` to include/exclude interfaces or structs for precise control.
+- **Validate Incrementally:** Start with simple queries and models, then extend with complex templates and relationships over time.
+
+---
+
+## 6. Troubleshooting
+
+### Common Issues
+
+- **Method Signature Errors:**
+  - Ensure all finishing methods return either `(T, error)` or `(error)`.
+  - Methods cannot have more than two return values.
+  - The last return value must always be `error`.
+
+- **Template Syntax Errors:**
+  - Invalid or mismatched braces in SQL template comments cause generation failures.
+  - Use tooling or a linter to validate Go comment formatting.
+
+- **Unrecognized Types or Fields:**
+  - Missing imports or incorrect struct definitions can lead to unresolved fields.
+  - Use fully qualified names or import aliases consistently.
+
+- **Interface or Struct Not Included In Generation:**
+  - Check `genconfig.Config` settings for `IncludeInterfaces` or `ExcludeInterfaces` filters.
+  - Ensure naming patterns match.
+
+### Recovery Steps
+- Carefully review the error messages emitted during generation.
+- Use minimal interfaces with simple SQL to isolate issues.
+- Verify that your structs have proper exported fields.
+- Place interfaces and models in the same folder to simplify detection.
+
+---
+
+## 7. Next Steps & Related Content
+
+- After defining your interfaces and models, proceed to the [First Generation workflow](getting-started/configure-and-generate/first-generation) to generate your executable code.
+- Explore the [Configuring Generation](getting-started/configure-and-generate/basic-config) guide for customizing code generation behavior.
+- Dive into [Using Generated APIs](getting-started/configure-and-generate/project-integration) to integrate generated code with your Go project.
+- For building complex queries, see the [Template-Based Queries & SQL DSL](guides/advanced-usage-patterns/template-based-queries) guide.
+
+---
+
+## 8. Summary
+Defining query interfaces with embedded SQL templates paired with well-structured Go models is the cornerstone of utilizing GORM CLI effectively. This page has equipped you to write those interfaces and structs properly, apply the templating DSL, and prepare your codebase for generation — paving the way to type-safe, fluent database interaction.
+
+---
+
+## 9. References
+
+- [Core Concepts & Terminology](/overview/product-intro-basics/core-concepts-terminology) — foundational knowledge for query interfaces and models
+- [First Generation Guide](/getting-started/configure-and-generate/first-generation) — run your initial code generation
+- [Basic Configuration](/getting-started/configure-and-generate/basic-config) — customize your generation process
+- [Template-Based Queries & SQL DSL](/guides/advanced-usage-patterns/template-based-queries) — detailed templating features
+
+---
+
+## 10. Additional Resources
+
+- **Example Models:** Take inspiration from the `examples/models/user.go` for complex model design.
+- **Sample Queries:** See `examples/query.go` for practical interface and SQL template examples.
+
+---
+
+Feel free to reach out via the GORM CLI GitHub repository for further help: [https://github.com/go-gorm/cli](https://github.com/go-gorm/cli)
+
+---
