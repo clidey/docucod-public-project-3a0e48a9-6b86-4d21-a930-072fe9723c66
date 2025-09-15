@@ -1,0 +1,260 @@
+---
+title: "Creating Field Helpers from Models"
+description: "Discover how to generate model-centric field helpers for filters, updates, and associations, giving you strongly typed, fluent APIs for working with your data models. Includes a step-by-step example using common model patterns."
+---
+
+# Creating Field Helpers from Models
+
+Discover how to generate model-centric field helpers for filters, updates, and associations, giving you strongly typed, fluent APIs for working with your data models. This guide includes a practical example using common model patterns to help you master field helper generation with GORM CLI.
+
+---
+
+## 1. Overview
+
+### What This Guide Helps You Accomplish
+This guide enables you to generate powerful, strongly typed field helpers directly from your Go model structs using GORM CLI. These helpers facilitate fluent and type-safe construction of filters, updates, and association operations within your GORM-based projects.
+
+### Prerequisites
+- You have Go 1.18+ installed.
+- GORM CLI is installed and accessible (`gorm gen` command).
+- A working Go project with GORM models defined as structs.
+- Basic familiarity with GORM and Go generics.
+
+### Expected Outcome
+By completing this guide, you will:
+- Generate strongly typed field helper variables from your models.
+- Use these helpers to construct expressive and safe queries and updates.
+- Manage associations (Has One, Has Many, Belongs To, Many2Many) with compile-time safety.
+
+### Time Estimate
+Approximately 15–20 minutes to generate field helpers and understand usage examples.
+
+### Difficulty Level
+Intermediate: Requires familiarity with Go, GORM, and basic code generation concepts.
+
+---
+
+## 2. How Field Helpers Work
+
+GORM CLI generates field helpers for each model struct you define, producing variables and types that correspond to each field and association.
+
+- **Basic fields** (e.g., int, string, bool, time.Time) get typed helper objects with common operations like `Eq`, `Like`, `Between`, etc.
+- **Nullable or specialized types** (e.g., `sql.NullInt64`, custom tag-driven types) get mapped to appropriate helper types.
+- **Associations** become helpers to manage linked entities with fluent operations like `Create`, `Update`, `Unlink`, and `Delete`.
+
+These helpers provide a fluent API for conditions and assignments, reducing runtime errors and enhancing discoverability.
+
+---
+
+## 3. Step-by-Step Guide to Generating and Using Field Helpers
+
+<Steps>
+<Step title="Step 1: Define Your Models Clearly">
+Make sure your models are defined as Go structs with proper GORM tags if needed. Associations must be declared using GORM conventions.
+
+**Example:**
+```go
+// models/user.go
+package models
+
+import (
+	"database/sql"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+type User struct {
+	gorm.Model
+	Name      string
+	Age       int
+	Birthday  *time.Time
+	Score     sql.NullInt64
+	LastLogin sql.NullTime
+	Account   Account
+	Pets      []*Pet
+	Toys      []Toy `gorm:"polymorphic:Owner"`
+	CompanyID *int
+	Company   Company
+	ManagerID *uint
+	Manager   *User
+	Team      []User `gorm:"foreignkey:ManagerID"`
+	Languages []Language `gorm:"many2many:UserSpeak"`
+	Friends   []*User `gorm:"many2many:user_friends"`
+	Role      string
+	IsAdult   bool `gorm:"column:is_adult"`
+	Profile   string `gen:"json"`
+}
+```
+
+This struct includes basic fields, nullable types, polymorphic associations, many-to-many, and belongs-to associations.
+
+<Check>Ensure all associations and special field tags like `gen:"json"` are present before generation.</Check>
+</Step>
+
+<Step title="Step 2: Configure the Generator (Optional)">
+Optionally, create a configuration file to customize field helper mappings, output paths, or include/exclude structs.
+
+**Example configuration in the same package:**
+```go
+var _ = genconfig.Config{
+	OutPath: "examples/output",
+	FieldTypeMap: map[any]any{
+		sql.NullTime{}: field.Time{},
+	},
+	FieldNameMap: map[string]any{
+		"json": JSON{},
+	},
+}
+```
+
+This ensures fields tagged with `gen:"json"` use the JSON helper, and maps `sql.NullTime` to `field.Time`.
+
+<Info>If omitted, default mappings apply.</Info>
+</Step>
+
+<Step title="Step 3: Run the GORM CLI Code Generation">
+Run the GORM CLI generator targeting the directory containing your models and interfaces.
+
+```bash
+gorm gen -i ./models -o ./generated
+```
+
+This command generates structs with field helpers in the specified output directory.
+
+<Check>Verify the output folder contains files like `models/user.go` with field helper variables.</Check>
+</Step>
+
+<Step title="Step 4: Use Generated Field Helpers in Your Code">
+The generator produces variables named after your model structs, providing typed accessor fields.
+
+**Example of using generated helpers to query:**
+```go
+// Query users older than 18 with active role
+users, err := gorm.G[models.User](db).
+	Where(generated.User.Age.Gt(18), generated.User.Role.Eq("active")).
+	Find(ctx)
+```
+
+**Example of using helpers for updates:**
+```go
+// Update user role where name is 'pending'
+_, err := gorm.G[models.User](db).
+	Where(generated.User.Role.Eq("pending")).
+	Set(generated.User.Role.Set("active")).
+	Update(ctx)
+```
+
+Here `generated.User.Age.Gt(18)` generates an expression `age > 18`, fully type-safe and discoverable.
+</Step>
+
+<Step title="Step 5: Manage Associations with Fluent Helper APIs">
+Association helpers allow creating, updating, unlinking, or deleting related records safely.
+
+**Example: Create a user with a pet:**
+```go
+gorm.G[models.User](db).
+	Set(
+		generated.User.Name.Set("alice"),
+		generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+	).
+	Create(ctx)
+```
+
+**Example: Unlink a pet by name:**
+```go
+gorm.G[models.User](db).
+	Where(generated.User.ID.Eq(1)).
+	Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Unlink()).
+	Update(ctx)
+```
+
+This flexible API prevents manual SQL crafting for associations and ensures safe FK management.
+</Step>
+</Steps>
+
+---
+
+## 4. Practical Examples
+
+### Basic Field Filters
+```go
+// Find users named 'jinzhu' between ages 18 and 65
+users, err := gorm.G[models.User](db).
+	Where(
+		generated.User.Name.Like("%jinzhu%"),
+		generated.User.Age.Between(18, 65),
+	).
+	Find(ctx)
+```
+
+### Updates with Zero Values and Expressions
+```go
+gorm.G[models.User](db).
+	Where(generated.User.Name.Eq("alice")).
+	Set(
+		generated.User.Age.Set(0),          // Explicit zero int
+		generated.User.IsAdult.Set(false),  // Zero bool
+		generated.User.Score.Set(sql.NullInt64{}), // Null
+		generated.User.Age.SetExpr(clause.Expr{SQL: "age + ?", Vars: []any{1}}), // Increment
+	).
+	Update(ctx)
+```
+
+### Working with Associations
+```go
+// Create a user and link multiple languages
+gorm.G[models.User](db).
+	Set(
+		generated.User.Name.Set("polyglot"),
+		generated.User.Languages.CreateInBatch([]models.Language{{Code: "EN"}, {Code: "FR"}}),
+	).
+	Create(ctx)
+```
+
+---
+
+## 5. Troubleshooting & Tips
+
+<AccordionGroup title="Common Issues and Solutions">
+<Accordion title="Field Helpers Not Generated">
+- Ensure your model structs are in the input directory passed to `gorm gen`.
+- Confirm your models are exported (public) types with exported fields.
+- Check for the presence of a `genconfig.Config` if you rely on custom mappings.
+- Avoid running `gorm gen` on already generated files (they are skipped).
+</Accordion>
+<Accordion title="Association Helpers Seem Missing or Incomplete">
+- Verify that GORM associations are correctly declared in your models.
+- Polymorphic and many-to-many associations must follow proper GORM tagging.
+- Use the latest GORM CLI version to support complex associations.
+</Accordion>
+<Accordion title="Zero-Value Field Updates Not Applying">
+- Use the `Set()` API explicitly to assign zero values; direct `Update()` with zero values may skip fields.
+- Use `SetExpr()` for expressions like increments or SQL-based updates.
+</Accordion>
+</AccordionGroup>
+
+<Tip>
+Always review generated code in your output directory before integrating it. This practice helps you catch issues or customize additional helpers if needed.
+</Tip>
+
+---
+
+## 6. Next Steps & Related Content
+
+- Explore [Building Type-Safe Queries](../workflows-real-world-usage/building-type-safe-queries) to layer complex queries on top of generated field helpers.
+- Learn [Working With Associations](../workflows-real-world-usage/working-with-associations) for advanced relation operations.
+- Customize field helper generation using [Configuring Generation](../../getting-started/initial-usage/configuration-basics).
+- After mastering field helpers, enhance your workflow by exploring [SQL Template DSL & Best Practices](../workflows-real-world-usage/sql-templates-and-dsl-best-practices).
+
+---
+
+## References
+- [What is GORM CLI?](../../overview/intro-value-core-concepts/what-is-gorm-cli)
+- [Core Features and Value Proposition](../../overview/intro-value-core-concepts/core-features-and-value)
+- [Defining Models & Query Interfaces](../../getting-started/initial-usage/defining-models-interfaces)
+- [Generating Code with GORM CLI](../../getting-started/initial-usage/generating-code)
+
+---
+
+Start generating your field helpers today and unleash type-safe, fluent query building tailored to your data models!
