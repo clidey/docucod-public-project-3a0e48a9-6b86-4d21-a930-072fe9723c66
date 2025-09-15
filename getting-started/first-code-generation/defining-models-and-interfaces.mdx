@@ -1,0 +1,234 @@
+---
+title: "Defining Models and Query Interfaces"
+description: "How to structure your models and query interface definitions so GORM CLI can generate fluent, type-safe APIs. Includes location, example structure, and tips for common scenarios."
+---
+
+# Defining Models and Query Interfaces
+
+Efficient use of GORM CLI starts by structuring your Go models and query interfaces correctly. This page guides you on how to declare models and interfaces so that GORM CLI can generate fluent, type-safe query APIs and model-driven field helpers seamlessly.
+
+---
+
+## 1. Location and Organization
+
+Place your model structs and query interface definitions in the same Go package or directory. This organization allows GORM CLI to detect and process all relevant source files during code generation.
+
+- Models should be typical Go structs representing database tables.
+- Query interfaces define SQL-driven methods annotated with raw SQL templates in Go comments.
+
+### Example File Structure
+
+```
+/project-root/examples/
+  ├── models/
+  │    └── user.go           # GORM models like User, Account, Pet, etc.
+  └── query.go               # Query interfaces with SQL template comments
+```
+
+
+## 2. Writing Your Models
+
+Models should be Go structs representing your database schema. Use standard GORM struct tags or additional `gen` tags to influence code generation.
+
+### Key Guidelines:
+
+- **Basic fields**: Use Go primitive types, pointers, or types supporting `database/sql.Scanner` and `driver.Valuer` interfaces.
+- **Named types** and special fields (e.g., `sql.NullTime`) can be mapped using configuration (covered elsewhere).
+- **Associations**: Declare `has one`, `has many`, `belongs to`, and `many-to-many` relationships using GORM tags.
+- **Custom tags (`gen` tag)**: You can specify custom mappings for field helpers, for example to assign JSON helpers.
+
+### Example Model: User and Related Models
+```go
+package models
+
+import (
+	"database/sql"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+type User struct {
+	gorm.Model
+	Name      string
+	Age       int
+	Birthday  *time.Time
+	Score     sql.NullInt64
+	LastLogin sql.NullTime
+
+	Account   Account        // has one
+	Pets      []*Pet         // has many
+	Toys      []Toy          `gorm:"polymorphic:Owner"`
+	CompanyID *int
+	Company   Company        // belongs to
+	ManagerID *uint
+	Manager   *User          // belongs to (self-reference)
+	Team      []User         `gorm:"foreignkey:ManagerID"` // has many (self-reference)
+
+	Languages []Language     `gorm:"many2many:UserSpeak"`
+	Friends   []*User        `gorm:"many2many:user_friends"`
+
+	Role      string
+	IsAdult   bool           `gorm:"column:is_adult"`
+
+	Profile   string         `gen:"json"`  // Custom JSON helper mapping
+}
+
+// Other related models below
+
+type Account struct {
+	gorm.Model
+	UserID       sql.NullInt64
+	Number       string
+	RewardPoints sql.NullInt64
+	LastUsedAt   sql.NullTime
+}
+
+type Pet struct {
+	gorm.Model
+	UserID *uint
+	Name   string
+	Toy    Toy `gorm:"polymorphic:Owner;"`
+}
+
+type Toy struct {
+	gorm.Model
+	Name      string
+	OwnerID   uint
+	OwnerType string
+}
+
+type Company struct {
+	ID   int
+	Name string
+}
+
+type Language struct {
+	Code string `gorm:"primarykey"`
+	Name string
+}
+```
+
+---
+
+## 3. Declaring Query Interfaces
+
+Query interfaces define methods annotated with SQL templates or raw SQL in Go comments, describing what queries or updates to generate.
+
+### Key Points:
+
+- Interfaces are generic (`interface[T any]`) to generate strongly typed methods for any model.
+- Use Go method signatures with parameters binding to SQL placeholders.
+- Document each method with embedded SQL or templated SQL in comments immediately above the method.
+- Use `@@table`, `@@column`, `@param`, and template DSL directives (`{{where}}`, `{{set}}`) for dynamic SQL.
+- Return types should be concrete models wrapped in the type parameter `T`, with an `error` as the last return value.
+- If no `context.Context` is declared as a param, GORM CLI injects it automatically.
+
+
+### Example Query Interface
+```go
+package examples
+
+type Query[T any] interface {
+  // GetByID fetches a record by ID
+  //
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // Filter with dynamic column name
+  // SELECT * FROM @@table WHERE @@column=@value
+  FilterWithColumn(column string, value string) (T, error)
+
+  // Query with conditional WHERE based on struct fields
+  // SELECT * FROM @@table
+  // {{if user.ID > 0}}
+  //     WHERE id=@user.ID
+  // {{else if user.Name != ""}}
+  //     WHERE name=@user.Name
+  // {{end}}
+  QueryWith(user models.User) (T, error)
+
+  // Update with conditional SET clause
+  // UPDATE @@table
+  //  {{set}}
+  //    {{if user.Name != ""}} name=@user.Name, {{end}}
+  //    {{if user.Age > 0}} age=@user.Age, {{end}}
+  //    {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+  //  {{end}}
+  // WHERE id=@id
+  UpdateInfo(user models.User, id int) error
+
+  // Filter over slice of users with complex WHERE
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{for _, user := range users}}
+  //     {{if user.Name != "" && user.Age > 0}}
+  //       (name = @user.Name AND age=@user.Age AND role LIKE concat("%",@user.Role,"%")) OR
+  //     {{end}}
+  //   {{end}}
+  // {{end}}
+  Filter(users []models.User) ([]T, error)
+
+  // Simple WHERE clause with parameters
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+
+  // Filter by time range
+  // SELECT * FROM @@table
+  //  {{where}}
+  //    {{if !start.IsZero()}}
+  //      created_at > @start
+  //    {{end}}
+  //    {{if !end.IsZero()}}
+  //      AND created_at < @end
+  //    {{end}}
+  //  {{end}}
+  FilterWithTime(start, end time.Time) ([]T, error)
+}
+```
+
+### Using Template DSL:
+
+- `@@table`: resolved to the DB table name for the model.
+- `@@column`: dynamic column references.
+- `@param`: binds method parameters or struct fields.
+- `{{where}}` and `{{set}}`: conditionally build SQL clauses.
+- `{{if}}` and `{{for}}`: control flow for SQL fragments.
+
+### Tips:
+
+- Document SQL clearly for maintainability.
+- Parameters should correspond exactly to placeholders in SQL.
+- Validate that each method's return includes an error.
+
+---
+
+## 4. Best Practices and Common Scenarios
+
+- **Keep models idiomatic**: Follow Go and GORM conventions.
+- **Consistent naming**: Use clear names for interface methods to reflect their SQL purpose.
+- **Handle associations carefully**: Declare related structs and associations properly to generate helpers.
+- **Use custom field mappings** with the `genconfig.Config` if you have non-standard types.
+- **Compose interfaces per domain**: Create multiple interfaces if needed, each focused on a logical set of queries.
+
+---
+
+## 5. Next Steps
+
+After defining models and query interfaces correctly:
+
+- Run the code generator with the `gorm gen` CLI command, pointing at your interface files.
+- Use generated type-safe APIs and field helpers in your application code.
+- Explore advanced customization in configuration and association patterns.
+
+---
+
+## References and Related Documentation
+
+- [Product Value and Use Cases](/overview/introduction_value/value_prop_use_cases)
+- [Running the Code Generator](/getting-started/first-code-generation/running-gorm-cli-gen)
+- [Basic Configuration](/getting-started/setup-and-installation/basic-configuration)
+- [Working with Associations](/guides/advanced-use-cases/associations-best-practices)
+- [Template SQL DSL](/guides/advanced-use-cases/template-sql-dsl)
+
+---
