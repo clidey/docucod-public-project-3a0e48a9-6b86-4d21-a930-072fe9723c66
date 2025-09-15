@@ -1,0 +1,254 @@
+---
+title: "Template System and Extensibility"
+description: "Explores the underlying templating engine that powers interface-driven queries, template DSL directives, and how you can extend or modify the DSL to fit advanced query or update requirements."
+---
+
+# Template System and Extensibility
+
+GORM CLI’s template system is the engine that transforms your Go interface method comments—embedded with SQL and DSL directives—into safe, type-checked, and expressive Go code. This powerful yet approachable templating DSL enables you to write dynamic SQL queries, updates, and other database operations inline, leveraging Go-like control flow constructs seamlessly.
+
+This page unpacks how the templating system works, the key DSL directives you’ll use, how the engine parses and generates code, and how to extend or customize the DSL to accommodate advanced query needs.
+
+---
+
+## 1. Understanding the Template DSL
+
+At its core, the template system lets you embed SQL statements enriched with a few specialized directives and Go-like template constructs inside your query interface method comments. This approach provides an elegant balance between raw SQL flexibility and the safety and expressiveness of Go code generation.
+
+### Key DSL Directives and Syntax
+
+| Directive        | Purpose                              | Typical Usage Example                                     |
+|------------------|------------------------------------|----------------------------------------------------------|
+| `@@table`        | Inserts the current model's table name | `SELECT * FROM @@table WHERE id=@id`                      |
+| `@@column`       | Dynamic column binding for queries | `SELECT * FROM @@table WHERE @@column=@value`             |
+| `@param`         | Binds Go method parameters securely | `WHERE username=@name`                                    |
+| `{{where}}...{{end}}` | Defines a conditional WHERE clause that compiles only if subconditions produce content | 
+```
+{{where}}
+  {{if age > 0}} age=@age {{end}}
+{{end}}
+```
+| `{{set}}...{{end}}`   | Defines a conditional SET clause (for UPDATEs) to dynamically build update lists           |
+| `{{if condition}}...{{else}}...{{end}}` | Go-like conditional logic inside templates              |
+| `{{for ...}}...{{end}}` | Iteration support to loop over collections in queries | `{{for _, u := range users}} u.id=@u.ID {{end}}`          |
+
+### Real-World Example: Dynamic Update
+
+```sql
+UPDATE @@table
+{{set}}
+  {{if user.Name != ""}} name=@user.Name, {{end}}
+  {{if user.Age > 0}} age=@user.Age, {{end}}
+  {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+{{end}}
+WHERE id=@id
+```
+
+This template dynamically includes columns to update based on field values, trimming trailing commas safely.
+
+### Parameter Binding
+
+- `@param` placeholders map directly to method parameters by name.
+- `@@table` and `@@column` are special placeholders replaced by the generator with table and column references, ensuring the generated code uses proper GORM abstractions.
+- Escaping parameters is supported by prefixing `@` with a backslash, e.g., `\@name` to emit literal strings.
+
+---
+
+## 2. How the Template Engine Works Internally
+
+While you do not need to know implementation details to use the DSL, understanding the flow helps troubleshoot and extend.
+
+### Parsing Flow
+
+- The templating engine parses interface method comments into an Abstract Syntax Tree (AST) representing textual nodes, conditional branches, loops, and function blocks (`where`, `set`).
+- Special placeholders like `@param`, `@@table` are identified and replaced with Go code statements to safely append SQL strings and bind parameters.
+- Nesting of `{{if}}`, `{{for}}`, and directives must be well-formed—unmatched `{{end}}` will raise parser errors.
+
+### Code Generation
+
+- Raw SQL and directives are converted into a Go function body that builds the SQL string using a `strings.Builder`.
+- Parameters are appended to a slice safely, ensuring SQL injection prevention.
+- Conditionals translate into corresponding Go `if`/`else if`/`else` blocks.
+- Loops translate into `for` loops iterating over Go collections.
+
+### Example AST Snippet for a `where` block
+
+```go
+{
+  var tmp strings.Builder
+  if age > 0 {
+    tmp.WriteString(" age=? ")
+    params = append(params, age)
+  }
+  c := strings.TrimSpace(tmp.String())
+  if c != "" {
+    c = reTrim.ReplaceAllString(c, "")
+    sb.WriteString(" WHERE ")
+    sb.WriteString(c)
+  }
+}
+```
+
+This reflects how a `where` block with a condition is rendered.
+
+---
+
+## 3. Extending and Customizing the Template DSL
+
+The templating system is deliberately limited to maintain clarity and safety, but it provides extension points to fit advanced use cases.
+
+### Supported Constructs to Leverage
+
+- **`{{if}}` and `{{for}}`**: Use these Go-like controls freely to implement dynamic query logic.
+- **Placeholders**: Use `@@table`, `@@column`, and `@param` to bind dynamically and safely.
+- **`{{where}}` and `{{set}}` blocks**: These represent special, reusable SQL snippets with standardized behaviors.
+
+### How to Add New Directive Support
+
+Currently, the recognized directives are fixed (`where`, `set`, `for`, `if`, `else if`, `else`, `end`). To add support for custom directives:
+
+1. **Modify the parser**: Extend `RenderSQLTemplate` in `internal/gen/sqlparser.go` to recognize new custom blocks.
+2. **Implement Emission Logic**: Define how the new block emits Go code that builds proper SQL fragments.
+3. **Integrate into code generation** so that template methods using the custom directive can be parsed and generated correctly.
+
+> Note: Modifying the DSL engine requires Go programming knowledge and careful testing to avoid breaking generated code correctness.
+
+### Custom Field Mapping for Template Use
+
+- Use `genconfig.Config` to map Go types or field names to custom helper field implementations.
+- This affects generated code references used in templates, indirectly customizing SQL generation behavior.
+
+---
+
+## 4. Best Practices and Common Pitfalls
+
+### Best Practices
+
+- **Keep templates readable** by using consistent indentation and spacing.
+- **Use `{{where}}` and `{{set}}` blocks** to organize conditional SQL fragments for WHERE and UPDATE clauses.
+- **Leverage parameter binding** (`@param`) instead of string interpolation to safeguard against injection.
+- **Test template parsing** with your interfaces early to catch syntax errors.
+- **Use comments to document your SQL templates** for maintainability and clarity.
+
+### Common Pitfalls to Avoid
+
+- **Unmatched or malformed `{{end}}`** directives causing parse errors.
+- **Referring to undefined parameters or variables** inside templates resulting in generation failures.
+- **Neglecting to trim trailing commas or spaces** in `{{set}}` blocks leading to invalid SQL.
+- **Overcomplicating templates with hard-to-read nested logic** instead of breaking queries into smaller interfaces.
+
+---
+
+## 5. Practical Example: From Template to Generated Method
+
+Consider the interface method with this SQL template comment:
+
+```go
+// UPDATE @@table
+// {{set}}
+//   {{if user.Name != ""}} name=@user.Name, {{end}}
+//   {{if user.Age > 0}} age=@user.Age, {{end}}
+//   {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+// {{end}}
+// WHERE id=@id
+UpdateUser(user User, id int) error
+```
+
+This compiles to a Go method whose body builds an SQL string dynamically:
+
+```go
+var sb strings.Builder
+params := make([]any, 0, 4)
+sb.WriteString("UPDATE ?")
+params = append(params, clause.Table{Name: clause.CurrentTable})
+{
+  var tmp strings.Builder
+  if user.Name != "" {
+    tmp.WriteString(" name=?,")
+    params = append(params, user.Name)
+  }
+  if user.Age > 0 {
+    tmp.WriteString(" age=?,")
+    params = append(params, user.Age)
+  }
+  if user.Age >= 18 {
+    tmp.WriteString(" is_adult=1")
+  } else {
+    tmp.WriteString(" is_adult=0")
+  }
+c := strings.TrimSpace(tmp.String())
+if c != "" {
+  c = strings.Trim(c, ", ")
+  sb.WriteString(" SET ")
+  sb.WriteString(c)
+}
+}
+sb.WriteString(" WHERE id=?")
+params = append(params, id)
+return e.Exec(ctx, sb.String(), params...)
+```
+
+This code is generated transparently for you, ensuring dynamic SQL built from your descriptive template.
+
+---
+
+## 6. Troubleshooting Template Issues
+
+<AccordionGroup title="Common Template DSL Issues and Solutions">
+<Accordion title="Unmatched {{end}} or syntax errors">
+Check your template for matching `{{if}}`, `{{for}}`, and `{{end}}` directives. The parser requires strict nesting.
+
+Use the provided CLI or tests to check for parsing errors early.
+</Accordion>
+<Accordion title="Undefined parameter in template">
+Ensure every `@param` placeholder matches a method parameter by exact name.
+
+Variable references inside `{{if}}` and `{{for}}` blocks must be valid Go expressions and in scope.
+</Accordion>
+<Accordion title="Trailing commas in {{set}} block">
+Always trim the trailing commas/whitespace from dynamic SET lists to avoid invalid SQL.
+
+Use `strings.Trim(c, ", ")` inside your template-generated code as shown in examples.
+</Accordion>
+<Accordion title="Escaping @ symbol">
+To use literal `@` in SQL (not parameter), escape with `\@` inside the template comment.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 7. Additional Resources
+
+- [Template DSL Reference and Advanced Usage Guide](/guides/advanced-usage/template-dsl)
+- [Type-Safe Queries with Interfaces Guide](/guides/core-workflows/type-safe-queries)
+- [Generation Configuration and Customization](/concepts/configuration-and-extensibility/generation-config)
+- Source code for the template parser and renderer: [`internal/gen/sqlparser.go`](https://github.com/go-gorm/cli/blob/main/internal/gen/sqlparser.go)
+
+---
+
+## Summary Diagram: Template Processing Flow
+
+```mermaid
+flowchart TD
+  Start([Start Template Parsing]) --> ParseAST[Parse Template into AST]
+  ParseAST -->|Identify Text & Functions| IdentifyNodes
+  IdentifyNodes -->|Handle Directives| ProcessBlocks{Directive Type?}
+  ProcessBlocks -->|if/else| GenerateConditionals
+  ProcessBlocks -->|for| GenerateLoops
+  ProcessBlocks -->|where/set| GenerateSpecialBlock
+  ProcessBlocks -->|text| GenerateText
+  GenerateConditionals --> BuildSQL
+  GenerateLoops --> BuildSQL
+  GenerateSpecialBlock --> BuildSQL
+  GenerateText --> BuildSQL
+  BuildSQL --> BindParams[Bind Parameters Safely]
+  BindParams --> OutputCode[Generate Go Code]
+  OutputCode --> End([Template Compilation Complete])
+
+  classDef directive fill:#f9f,stroke:#333,stroke-width:2px;
+  ProcessBlocks,GenerateConditionals,GenerateLoops,GenerateSpecialBlock directive;
+```
+
+---
+
+With this deep understanding of the template system and its extensibility features, you are empowered to craft robust, safe, and reusable SQL queries embedded directly within Go interfaces—unlocking the full power of GORM CLI’s type-safe generation capabilities.

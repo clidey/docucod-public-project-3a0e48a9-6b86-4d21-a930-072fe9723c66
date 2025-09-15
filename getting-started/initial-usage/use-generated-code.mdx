@@ -1,0 +1,310 @@
+---
+title: "Using the Generated Code"
+description: "Learn how to apply the generated APIs in your application code. This page explains the idiomatic usage of queries and field helpers, offering practical code snippets for fetching, filtering, and updating records using the fluent API."
+---
+
+# Using the Generated Code
+
+Learn how to apply the generated APIs in your application code. This page explains how to use the idiomatic, type-safe query interfaces and model-driven field helpers produced by GORM CLI, with practical examples for fetching, filtering, updating records, and working with associations using the fluent API.
+
+---
+
+## 1. Understanding the Generated APIs
+
+After running the GORM CLI generator, your output directory will contain:
+
+- **Type-safe query interfaces:** Concrete implementations of your defined query interfaces with SQL template methods.
+- **Model-driven field helpers:** Typed helpers for each model field and associations that facilitate building fluent, compile-time safe queries.
+
+These components integrate seamlessly with `gorm.io/gorm`, letting you compose expressive queries and updates with strong typing and IDE discoverability.
+
+---
+
+## 2. Basic Usage of Query Interfaces
+
+The generated code provides a factory function for each query interface, e.g., `Query[T any](db *gorm.DB, opts ...clause.Expression) QueryInterface[T]`. Use this to start building queries.
+
+### Step-by-Step Example: Fetch by ID
+
+```go
+ctx := context.Background()
+
+// Retrieve a single User by ID using the generated query interface
+user, err := generated.Query[models.User](db).GetByID(ctx, 123)
+if err != nil {
+    // Handle error (e.g., not found or DB issue)
+    log.Fatalf("GetByID failed: %v", err)
+}
+
+fmt.Printf("Fetched user: %+v\n", user)
+```
+
+**Outcome:** This runs the type-safe `GetByID` query with proper SQL binding, returning the matched record or an error.
+
+### Practical Tip
+Always pass a `context.Context` to allow cancellation and timeouts.
+
+
+---
+
+## 3. Filtering and Querying Data
+
+Generated query interfaces support complex filters based on your SQL templates.
+
+### Filtering Example: Find Users by Name and Age
+
+Given a method like `FilterByNameAndAge(name string, age int)`, invoke:
+
+```go
+users, err := generated.Query[models.User](db).FilterByNameAndAge("jinzhu", 25).Find(ctx)
+if err != nil {
+    log.Fatalf("FilterByNameAndAge failed: %v", err)
+}
+
+for _, u := range users {
+    fmt.Printf("User: %+v\n", u)
+}
+```
+
+This composes the query and appends the conditions specified by the method’s SQL template.
+
+### Advanced Example: Using Complex Query Templates
+
+The generator converts interface methods with embedded SQL templates into fluent methods. For example:
+
+```go
+users, err := generated.Query[models.User](db).
+    QueryWith(models.User{Name: "Alice", Age: 30}).
+    Find(ctx)
+```
+
+This dynamically builds the `WHERE` clause based on non-zero fields of the struct.
+
+---
+
+## 4. Using Model-Driven Field Helpers
+
+Each model field provides strongly typed helpers for predicates, setters, and expressions, enabling fluent query construction.
+
+### Common Predicates and Setters
+
+```go
+// Equal predicate on the 'Name' field
+generated.User.Name.Eq("alice")
+
+// Range predicate on the 'Age' field
+generated.User.Age.Between(18, 65)
+
+// Null check on a nullable field
+generated.User.Score.IsNull()
+
+// Setting values for updates or creates
+generated.User.Name.Set("bob")
+generated.User.Age.Incr(1) // Increment age by 1
+```
+
+### Composing with GORM's Fluent API
+
+```go
+// Find all users older than 18
+users := []models.User{}
+err := gorm.G[models.User](db).
+    Where(generated.User.Age.Gt(18)).
+    Find(ctx, &users)
+if err != nil {
+    log.Fatalf("Query failed: %v", err)
+}
+```
+
+**Outcome:** Compact, readable, and type-safe SQL conditions.
+
+---
+
+## 5. Performing Updates Using Generated Code
+
+Use the fluent `Set(...)` methods on fields combined with `Update(ctx)` or `Create(ctx)`.
+
+### Example: Update User Information
+
+```go
+err := gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(10)).
+    Set(
+        generated.User.Name.Set("newname"),
+        generated.User.IsAdult.Set(true),
+    ).
+    Update(ctx)
+if err != nil {
+    log.Fatalf("Update failed: %v", err)
+}
+```
+
+### Example: Create a New User
+
+```go
+err := gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Age.Set(20),
+        generated.User.Role.Set("active"),
+    ).
+    Create(ctx)
+if err != nil {
+    log.Fatalf("Create failed: %v", err)
+}
+```
+
+---
+
+## 6. Working with Associations
+
+Association helpers simplify related data operations with type safety. They appear on generated structs as `field.Struct[T]` (single relation) or `field.Slice[T]` (collections).
+
+### Supported Association Operations
+
+- **Create:** Inserts and associates a new related row.
+- **Update:** Updates existing associated rows matching conditions.
+- **Unlink:** Removes the association link without deleting related data.
+- **Delete:** Deletes associated rows or join records (for many-to-many).
+- **CreateInBatch:** Batch create and associate multiple related rows.
+
+### Example: Create a User with a Pet
+
+```go
+err := gorm.G[models.User](db).
+    Set(
+        generated.User.Name.Set("alice"),
+        generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+    ).
+    Create(ctx)
+if err != nil {
+    log.Fatalf("Create with association failed: %v", err)
+}
+```
+
+### Example: Update Associated Pets
+
+```go
+err := gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(
+        generated.User.Pets.Where(generated.Pet.Name.Eq("fido"))
+            .Update(generated.Pet.Name.Set("rex")),
+    ).
+    Update(ctx)
+if err != nil {
+    log.Fatalf("Update associated pets failed: %v", err)
+}
+```
+
+### Example: Unlink and Delete Associations
+
+```go
+// Unlink pets
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Unlink()).
+    Update(ctx)
+
+// Delete old pets
+gorm.G[models.User](db).
+    Where(generated.User.ID.Eq(1)).
+    Set(generated.User.Pets.Where(generated.Pet.Age.Lt(5)).Delete()).
+    Update(ctx)
+```
+
+### Semantics Summary
+
+| Operation | Belongs To          | Has One / Has Many    | Many-to-Many        |
+|-----------|--------------------|----------------------|---------------------|
+| Unlink    | Set FK NULL        | Set FK NULL          | Remove join rows    |
+| Delete    | Remove associated  | Remove child rows     | Remove join rows    |
+
+---
+
+## 7. Using Generated SQL Template DSL Methods
+
+Your query interfaces can include SQL templates with placeholders and conditions enabling flexible queries.
+
+### Example Interface
+
+```go
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // SELECT * FROM @@table
+  // {{where}}
+  //   {{if @user.Name != ""}} name=@user.Name {{end}}
+  //   {{if @user.Age > 0}} AND age=@user.Age {{end}}
+  // {{end}}
+  SearchUsers(user models.User) ([]T, error)
+}
+```
+
+### Usage
+
+```go
+results, err := generated.Query[models.User](db).
+    SearchUsers(ctx, models.User{Name: "jinzhu", Age: 25})
+```
+
+This builds a query dynamically based on the fields provided.
+
+### Supported Template DSL
+
+| Directive   | Use Case                                      | Example
+| ----------- | ---------------------------------------------|--------------------------
+| `@@table`   | Resolves to the underlying DB table name     | `SELECT * FROM @@table WHERE id=@id`
+| `@@column`  | Dynamic column filtering                      | `@@column=@value`
+| `@param`    | Bind Go method parameters to query placeholders| `WHERE name=@user.Name`
+| `{{where}}` | Conditional WHERE clause                      | `{{where}} age > 18 {{end}}`
+| `{{set}}`   | Conditional SET clause in UPDATE              | `{{set}} name=@name {{end}}`
+| `{{if}}`    | Conditional SQL fragment                       | `{{if age > 0}} AND age=@age {{end}}`
+| `{{for}}`   | Loop over collections inside templates       | `{{for _, tag := range tags}} tags LIKE concat('%',@tag,'%') OR {{end}}`
+
+---
+
+## 8. Best Practices & Common Pitfalls
+
+- **Always use the `context.Context` parameter** injected by the generated methods to allow cancellation and deadlines.
+- Use generated **field helpers** over raw string conditions to avoid typos and SQL injection.
+- When filtering with dynamic parameters, ensure your SQL templates handle zero values and defaults gracefully.
+- For association operations, always call `Set(...)` before `Update(ctx)` or `Create(ctx)`.
+- Generated code is generic for models, so always use the typed factory function with your model type to get the correct interface.
+- Keep your query interfaces and model structs tidy to maintain clean generated code.
+
+### Troubleshooting Tips
+
+- If method signatures do not match expected patterns (e.g., missing `error` return), verify your interface method definitions.
+- SQL template syntax errors can be traced by reviewing your interface method comments and ensuring proper DSL usage.
+- Check your generation output directory for expected files and imports.
+- If code is not generated for some interfaces or structs, review your `genconfig.Config` filters for inclusions/exclusions.
+
+---
+
+## 9. Next Steps
+
+- Explore advanced usage of model-driven **association operations** for complex relationships.
+- Learn how to customize code generation via **`genconfig.Config`**.
+- Review guides on **type-safe queries** and **field helper operations** to boost productivity.
+- Consult troubleshooting and common issues documentation if you encounter problems.
+
+---
+
+## References and Links
+
+- [GORM CLI - Getting Started Guide](https://gorm.io/cli/docs/getting-started/setup-introduction/prerequisites)
+- [Generate Type-Safe APIs](https://gorm.io/cli/docs/getting-started/initial-usage/basic-generation)
+- [Association Operations Guide](https://gorm.io/cli/docs/guides/core-workflows/association-operations)
+- [Configuration & Extensibility](https://gorm.io/cli/docs/concepts/configuration-and-extensibility/generation-config)
+
+---
+
+For a quick overview on your generated APIs, see the [Feature Highlights](../overview/architecture-and-concepts/quick-feature-overview).
+
+For a deep dive into how to generate and customize these codes, consult the [How Code Generation Works](../overview/integration-and-use/generation-workflow) page.
+
+---
+
+By mastering the use of generated code, you'll harness the full power of GORM CLI to build robust, maintainable, and type-safe data access layers in your Go applications.

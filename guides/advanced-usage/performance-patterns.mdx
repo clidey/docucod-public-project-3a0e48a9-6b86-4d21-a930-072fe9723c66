@@ -1,0 +1,235 @@
+---
+title: "Performance & Best Practices"
+description: "Actionable recommendations for writing efficient interfaces and models, optimizing code generation, and leveraging GORM CLI in production workflows. Includes tips on minimizing allocations, proper batching, and avoiding common pitfalls."
+---
+
+# Performance & Best Practices
+
+Optimize your GORM CLI usage by applying targeted strategies for writing efficient query interfaces and models, managing code generation settings, and leveraging produced code in production environments. This guide helps you gain maximum performance, reduce resource waste, and avoid common pitfalls that affect runtime and maintenance.
+
+---
+
+## 1. Workflow Overview
+
+### What This Guide Helps You Achieve
+- Write efficient interfaces and models that generate performant, clean code
+- Understand best practices to minimize memory allocations and runtime overhead
+- Optimize batching and query patterns for large datasets
+- Leverage configuration options to tailor code generation for your project’s needs
+
+### Prerequisites
+- Familiarity with basic GORM CLI usage: defining query interfaces and models
+- Installed and configured GORM CLI with working generation
+- Understanding of your project’s data and query workload patterns
+
+### Expected Outcome
+- You will be able to write query interfaces and models that generate highly performant code
+- Adopt batching and filtering techniques that reduce database round-trips and memory usage
+- Configure generation to include only necessary code, improving build times and binary size
+
+### Time Estimate
+- 20 to 30 minutes to read and apply the tips
+
+### Difficulty Level
+- Intermediate to Advanced: knowledge of Go generics, GORM, and code generation concepts strongly recommended
+
+---
+
+## 2. Writing Efficient Interfaces and Models
+
+### Naming Conventions and Interface Patterns
+- **Use consistent interface naming patterns** such as `Query*` to leverage inclusion filters in the generation config (e.g., `IncludeInterfaces: []any{"Query*"}`) for efficient targeting.
+- Ensure interfaces follow expected SQL template conventions to avoid redundant or overly complex generated code.
+
+### Example: Patterned Query Interfaces
+```go
+// QueryUser matches pattern "Query*" and enables targeted generation.
+type QueryUser[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  ByID(id int) (T, error)
+}
+
+// Service interface is excluded if "Query*" pattern is used
+// preventing unnecessary generation.
+type Service[T any] interface {
+  One() (T, error)
+}
+```
+
+### Model Struct Design
+- Define clear model fields with correct GORM and `gen` tags to generate precise field helpers.
+- Use pointer types for nullable fields (`*time.Time`, `*int`) to clearly signal optional values.
+- Mark JSON or complex fields with field mappings (e.g., `gen:"json"`) to optimize generated code and avoid runtime parsing overhead.
+
+### Example Model Field with JSON Mapping
+```go
+type User struct {
+  Profile string `gen:"json"`
+}
+```
+
+---
+
+## 3. Optimizing Generated Code Usage
+
+### Minimize Runtime Allocations
+- The generated query implementations use buffered string builders and preallocated parameter slices.
+- Rely on these methods to keep SQL construction efficient and avoid unnecessary memory pressure.
+
+### Example Generated Pattern for Filter Method
+```go
+var sb strings.Builder
+params := make([]any, 0, 13)
+sb.WriteString("SELECT * FROM ?")
+params = append(params, clause.Table{Name: clause.CurrentTable})
+// Build dynamic where clauses with trimmed conditions
+```
+
+### Batch Operations
+- Use batch create and update helpers to minimize the number of database calls.
+- Avoid looping over individual inserts or updates when a batch operation is available.
+
+### Example: Batch Create Associations
+```go
+gorm.G[User](db).
+ Where(generated.User.ID.Eq(1)).
+ Set(generated.User.Languages.CreateInBatch([]models.Language{...})).
+ Update(ctx)
+```
+
+### Query Interface Best Practices
+- Keep SQL templates as simple as possible to avoid runtime condition complexity.
+- Use conditional directives (`{{if}}`, `{{where}}`) judiciously to reduce extra SQL.
+- Prefer parameter binding instead of string concatenation to prevent SQL injection and improve cache reuse.
+
+---
+
+## 4. Code Generation Configuration for Performance
+
+### Include and Exclude Filters
+- Use the generation config `IncludeInterfaces`, `ExcludeInterfaces`, `IncludeStructs`, and `ExcludeStructs` to focus generation on relevant code.
+- This improves build speed and reduces unnecessary generated files.
+
+### Example Config Snippet
+```go
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"Query*"},
+  ExcludeInterfaces: []any{"*Deprecated*"},
+}
+```
+
+### Custom Field Type Mapping
+- Map complex or custom fields (e.g., `sql.NullTime`, JSON fields) to specialized field helpers to optimize generated query expressions.
+
+### Example JSON Field Mapping in Config
+```go
+var _ = genconfig.Config{
+  FieldNameMap: map[string]any{
+    "json": JSON{},
+  },
+}
+```
+
+---
+
+## 5. Common Pitfalls and How to Avoid Them
+
+### Overly Complex SQL Templates
+- Avoid deep nested conditions and excessive loops inside templates which can increase generation complexity and runtime cost.
+- Break complex logic into smaller, reusable interface methods if necessary.
+
+### Large Batches Without Filtering
+- Always filter batch operations with `Where` clauses to avoid unexpected updates or deletes.
+
+### Ignoring Associations
+- Use the generated association helpers to safely operate on relational data.
+- Avoid manual FK handling which can lead to bugs and inefficient queries.
+
+### Incorrect Interface Inclusion
+- Misconfigured Include/Exclude patterns may result in either missing code or unnecessarily large generated codebases.
+- Review and test config patterns carefully.
+
+---
+
+## 6. Troubleshooting & Tips
+
+<AccordionGroup title="Troubleshooting & Optimization Tips">
+<Accordion title="Generated Code Generates Excessive Allocations">
+Verify your interface SQL templates are concise. Avoid building large dynamic SQL sections if possible. Use `{{where}}` and `{{set}}` directives to conditionally emit clauses only when needed.
+</Accordion>
+<Accordion title="Batch Create or Update Fails or Is Slow">
+Check that batch input collections are not circular or excessively large. Use `CreateInBatch` only on manageable slice sizes, and always include proper `Where` filters.
+</Accordion>
+<Accordion title="Unexpected Fields or Interfaces Are Generated">
+Review your genconfig filters for inclusion and exclusion. Use shell-style pattern matching carefully and test generation output.
+</Accordion>
+<Accordion title="Generated Code Does Not Match Your Schema Changes">
+Confirm you regenerated code after model changes. Also, check GORM model tags and gen configuration for consistency.
+</Accordion>
+<Accordion title="Performance Bottlenecks in Queries">
+Use the generated query methods with parameters bound correctly. Avoid loading large datasets without filters. Combine multiple operations into batch updates where possible.
+</Accordion>
+</AccordionGroup>
+
+<Tip>
+Remember: GORM CLI generates code optimized for both developer productivity and performance, but your interface and model design directly influence both generation speed and runtime efficiency.
+</Tip>
+
+---
+
+## 7. Next Steps & Related Documentation
+
+- Dive deeper into [Customizing Code Generation with Config](../guides/advanced-usage/customizing-generation) to tailor generation further.
+- Explore [Type-Safe Queries with Interfaces](../guides/core-workflows/type-safe-queries) to master SQL template writing and query patterns.
+- Review [Working with Model-Driven Field Helpers](../guides/core-workflows/model-field-helpers) for advanced usage of the generated fluent APIs.
+- Start using [Managing Associations and Relationships](../guides/core-workflows/association-operations) to safely handle relational data.
+
+---
+
+## Appendix: Example Interface & Config Patterns for Performance
+
+```go
+// Interface matching "Query*" to keep generation targeted
+package pattern
+
+type QueryUser[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  ByID(id int) (T, error)
+}
+
+// Configuration limiting generation scope
+type genconfig.Config struct {
+  IncludeInterfaces []any
+  ExcludeInterfaces []any
+  IncludeStructs    []any
+  ExcludeStructs    []any
+  // ... other config fields
+}
+
+var _ = genconfig.Config{
+  IncludeInterfaces: []any{"Query*"},
+  ExcludeInterfaces: []any{"*Deprecated*"},
+}
+```
+
+
+---
+
+_This page is part of the [Advanced Usage & Patterns](../../guides/advanced-usage/performance-patterns) guide suite._
+
+
+---
+
+## References
+- [GORM CLI README](../../README.md) - For full overview and getting started
+- [Customizing Generation](../customizing-generation) - Fine-tune generation preferences
+- [Type-Safe Querying](../type-safe-queries) - Master safe and efficient queries
+- [Model-Field Helpers](../model-field-helpers) - Use generated helpers effectively
+
+---
+
+## Support
+Join the GORM community on GitHub for further discussions and troubleshooting: [github.com/go-gorm/cli](https://github.com/go-gorm/cli)
+
+
+---
