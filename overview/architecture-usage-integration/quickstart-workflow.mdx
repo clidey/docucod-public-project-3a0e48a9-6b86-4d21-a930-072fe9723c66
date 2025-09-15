@@ -1,0 +1,206 @@
+---
+title: "Quickstart Workflow"
+description: "Guide users through the typical end-to-end journey: defining a query interface, annotating models, running the generator, and consuming the outputs. Emphasize tasks like writing interface methods, using SQL templates, and the transformation to generated code."
+---
+
+# Quickstart Workflow
+
+Unlock the power of GORM CLI through a straightforward, end-to-end workflow that takes you from defining your query interfaces to generating and consuming type-safe code effortlessly. This guide walks you through the essential tasks of crafting interface methods annotated with SQL templates, annotating model structs, running the code generator, and using the generated APIs in your application.
+
+---
+
+## 1. Defining Your Query Interface
+
+Your journey begins with writing query interfaces in Go. These interfaces describe the operations you want to perform against your database, expressed through methods whose SQL templates live in comments. GORM CLI turns these into concrete, type-safe methods with full compile-time verification.
+
+### What to Do:
+- Declare an interface type parameterized by your model type (e.g., `Query[T any]`).
+- Write methods that include raw SQL and templating directives in comments directly above them.
+
+### How it Helps:
+- You design queries declaratively, tightly coupled to your Go types.
+- SQL templates support placeholders (`@param`), dynamic columns (`@@column`), conditional blocks (`{{if}}`), and loops (`{{for}}`), enabling highly flexible queries.
+
+### Example:
+```go
+// Query interface with SQL templating
+// examples/query.go
+
+type Query[T any] interface {
+	// Retrieve a row by ID
+	// SELECT * FROM @@table WHERE id=@id
+	GetByID(id int) (T, error)
+
+	// Filter based on dynamic column and value
+	// SELECT * FROM @@table WHERE @@column=@value
+	FilterWithColumn(column string, value string) (T, error)
+
+	// Conditional query on User fields
+	// SELECT * FROM users
+	//   {{if user.ID > 0}}
+	//       WHERE id=@user.ID
+	//   {{else if user.Name != ""}}
+	//       WHERE name=@user.Name
+	//   {{end}}
+	QueryWith(user models.User) (T, error)
+
+	// Update example with dynamic SET clause
+	// UPDATE @@table
+	//  {{set}}
+	//    {{if user.Name != ""}} name=@user.Name, {{end}}
+	//    {{if user.Age > 0}} age=@user.Age, {{end}}
+	//    {{if user.Age >= 18}} is_adult=1 {{else}} is_adult=0 {{end}}
+	//  {{end}}
+	// WHERE id=@id
+	UpdateInfo(user models.User, id int) error
+}
+```
+
+<Tip>
+Make sure your interface methods use clear and consistent parameter names. The SQL template placeholders `@param` map directly to these parameters.
+</Tip>
+
+---
+
+## 2. Annotating Your Models
+
+While your queries focus on interfaces, your models provide the schema context for both query generation and field helper generation.
+
+### Key Points:
+- Define Go structs that represent your database tables.
+- Use GORM tags and optionally generation tags (`gen:"json"` etc.) to customize field helpers.
+
+### Example:
+```go
+// models/user.go
+package models
+
+type User struct {
+	gorm.Model
+	Name   string
+	Age    int
+	Status string
+	// Custom JSON field helper
+	Profile string `gen:"json"`
+}
+```
+
+---
+
+## 3. Running the Generator
+
+The core of the workflow is invoking the CLI generator to transform your interface definitions and model annotations into fully compiled query APIs and field helpers.
+
+### Command:
+```bash
+gorm gen -i ./path/to/interfaces -o ./path/to/generated
+```
+
+- `-i` points at the input directory or file containing your query interfaces.
+- `-o` defines where the generated code will be written (defaults to `./g`).
+
+### Behind the Scenes:
+- The CLI parses your interfaces and embedded SQL templates.
+- It applies templating and type mapping based on your models.
+- Generates idiomatic, type-safe Go code with query methods and strongly typed field helpers.
+
+<Tip>
+Ensure your input path contains both the model structs and interface definitions in the same or nested packages for accurate code generation.
+</Tip>
+
+---
+
+## 4. Consuming Generated Code
+
+Once generated, your new query APIs and field helpers are ready to use. They empower your codebase with fluent, compile-time safe queries and updates.
+
+### Using Query Interfaces:
+```go
+// Usage example after generation
+import (
+	"context"
+	"gorm.io/gorm"
+	"./generated" // your generated package
+)
+
+func example(db *gorm.DB, ctx context.Context) error {
+	// Retrieve user by ID
+	user, err := generated.Query[models.User](db).GetByID(ctx, 42)
+	if err != nil {
+		return err
+	}
+	
+	// Filter users by name and age
+	users, err := generated.Query[models.User](db).FilterByNameAndAge(ctx, "alice", 25).Find(ctx)
+	return err
+}
+```
+
+### Leveraging Field Helpers:
+- Use generated field helpers for filters in GORM queries, e.g., `generated.User.Age.Gt(18)`.
+- Compose fluent conditions and updates safely.
+
+### Example:
+```go
+// Find adult users
+users, err := gorm.G[models.User](db).
+  Where(generated.User.Age.Gt(18)).
+  Find(ctx)
+```
+
+---
+
+## Practical Tips & Best Practices
+
+- **Organize interfaces and models together:** It simplifies discovery and generation.
+- **Annotate fields thoughtfully:** Custom field mappings and tags enhance generated helpers.
+- **Review generated code:** It's fully readable Go code; understanding it boosts debugging.
+- **Incremental generation:** Run the generator after interface changes to keep code in sync.
+
+## Common Pitfalls
+
+<AccordionGroup title="Common Issues and How to Avoid Them">
+<Accordion title="Missing Input Path or Incorrect Directory">
+Make sure your `-i` input path points to the directory or Go file containing the interfaces with SQL annotations. The generator demands this path to process. Forgetting this leads to immediate CLI error.
+</Accordion>
+<Accordion title="Improper SQL Template Syntax">
+SQL template directives must be correctly formatted and use supported placeholders (`@`, `@@`, `{{if}}`, `{{where}}`). Syntax errors result in generation failures.
+</Accordion>
+<Accordion title="Model Definitions Not Found">
+If models are in a separate package not accessible or specified incorrectly, generated code might miss field helpers or produce errors. Keep model structs and interfaces accessible within the input path.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## Visualizing the Workflow
+
+```mermaid
+flowchart TD
+  A[Write Query Interfaces (Go with SQL templates)] --> B[Annotate Model Structs]
+  B --> C[Run gorm gen CLI]
+  C --> D[Generate Query APIs & Field Helpers]
+  D --> E[Use Generated APIs in Application]
+  E --> F[Achieve Type-Safe, Compile-Time Verified Queries]
+
+  %% Optional
+  C -.-> G[Apply genconfig for Customization]
+```
+
+---
+
+## Next Steps
+
+Now that you understand the quickstart workflow, deepen your mastery by exploring:
+
+- [Defining Models & Query Interfaces](../getting-started/initial-usage/defining-models-interfaces) to learn more about composing interfaces.
+- [Generating Code with GORM CLI](../getting-started/initial-usage/generating-code) for detailed generator options.
+- [Building Type-Safe Queries](../guides/workflows-real-world-usage/building-type-safe-queries) to leverage your generated APIs fully.
+
+<Tip>
+Consistently use the generated API for all database interaction to maximize type safety and minimize runtime errors.
+</Tip>
+
+---
+
+With this workflow, your development lifecycle gains speed, safety, and clarity—transitioning from raw SQL strings to structured, maintainable data access logic effortlessly.
