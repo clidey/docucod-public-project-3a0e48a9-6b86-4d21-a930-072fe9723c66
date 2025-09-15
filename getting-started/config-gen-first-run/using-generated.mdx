@@ -1,0 +1,288 @@
+---
+title: "Using the Generated APIs"
+description: "Learn how to incorporate the newly generated query and field helper APIs into your Go application. Includes straightforward examples of querying, updating, and filtering using the type-safe, fluent methods produced by GORM CLI."
+---
+
+# Using the Generated APIs
+
+Learn how to incorporate the newly generated query and field helper APIs into your Go application. This guide provides clear examples for querying, updating, and filtering your database using the type-safe, fluent methods produced by GORM CLI.
+
+---
+
+## 1. Importing the Generated Code
+
+Before using the generated APIs, ensure you import the generated package(s) into your Go application. Typically, your generated code will be placed in a directory you specified with the `-o` flag when running `gorm gen`.
+
+```go
+import (
+  "context"
+  "gorm.io/gorm"
+  "your/module/path/generated"  // Replace with your actual generated package path
+  "your/module/path/models"   // Your application model package
+)
+```
+
+> Replace `your/module/path/generated` and `your/module/path/models` with your actual module paths.
+
+
+## 2. Creating a Database Connection
+
+Integrate with your existing GORM DB instance, as the generated APIs expect a *gorm.DB object.
+
+```go
+// Initialize GORM DB connection (example using SQLite)
+db, err := gorm.Open(sqlite.Open("test.db"), &gorm.Config{})
+if err != nil {
+    panic(err)
+}
+
+// Create a context
+ctx := context.Background()
+```
+
+
+## 3. Querying Data with Generated Query Interfaces
+
+The core feature of GORM CLI is generating type-safe query methods from your annotated interfaces. Use generated query methods to perform common database reads.
+
+### Example: Query By ID
+
+```go
+query := generated.Query[models.User](db)
+
+user, err := query.GetByID(ctx, 123)
+if err != nil {
+    // Handle error
+}
+fmt.Printf("User: %+v\n", user)
+```
+
+> This executes a safe, parameter-bound SQL statement like:
+> ```sql
+> SELECT * FROM users WHERE id = 123
+> ```
+
+
+### Example: Filtering by Column
+
+Use dynamic filters built into generated query interfaces.
+
+```go
+specialUser, err := query.FilterWithColumn(ctx, "role", "special")
+if err != nil {
+    // Handle error
+}
+fmt.Printf("Special User: %+v\n", specialUser)
+```
+
+
+### Example: Query with Conditional Fields
+
+Generate flexible queries based on struct data.
+
+```go
+filterUser := models.User{Name: "dan"}
+result, err := query.QueryWith(ctx, filterUser)
+if err != nil {
+    // Handle error
+}
+fmt.Printf("Queried User: %+v\n", result)
+```
+
+
+### Example: Filtering With Multiple Users
+
+Filter by a list of users with combined conditions.
+
+```go
+users := []models.User{
+    {Name: "alice", Age: 20, Role: "active"},
+    {Name: "dan", Age: 40, Role: "pending"},
+}
+results, err := query.Filter(ctx, users)
+if err != nil {
+    // Handle error
+}
+fmt.Printf("Found %d users\n", len(results))
+```
+
+
+### Example: Filtering by Name and Age
+
+```go
+query.FilterByNameAndAge(ctx, "alice", 20)
+```
+
+(Note: This method chains query conditions; to execute, chain `.Find(ctx)` or `.First(ctx)`.)
+
+
+### Example: Filtering by Time Range
+
+```go
+start := time.Now().Add(-24 * time.Hour)
+end := time.Now()
+results, err := query.FilterWithTime(ctx, start, end)
+if err != nil {
+    // Handle error
+}
+fmt.Printf("Found %d users created in last 24 hours\n", len(results))
+```
+
+
+## 4. Updating Data Using Generated APIs
+
+Use the generated update methods to safely and fluently update records.
+
+```go
+updateUser := models.User{Name: "dan", Age: 40}
+err := query.UpdateInfo(ctx, updateUser, 123)
+if err != nil {
+    // Handle error
+}
+```
+
+> This executes an update SQL statement similar to:
+> ```sql
+> UPDATE users 
+> SET name = @name, age = @age, is_adult = CASE WHEN age >= 18 THEN 1 ELSE 0 END
+> WHERE id = 123
+> ```
+
+
+## 5. Using Model-Driven Field Helpers for Fluent Queries
+
+In addition to query interfaces, GORM CLI generates strong typed field helpers enabling expressive, chainable query building integrated with GORM.
+
+### Example: Basic Filter
+
+```go
+users := []models.User{}
+err := gorm.G[models.User](db).
+  Where(generated.User.Name.Eq("alice"), generated.User.Age.Gt(18)).
+  Find(ctx, &users)
+if err != nil {
+  // Handle error
+}
+```
+
+
+### Example: Updates Using Field Helpers
+
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Name.Set("alice"), generated.User.IsAdult.Set(true)).
+  Update(ctx)
+if err != nil {
+  // Handle error
+}
+```
+
+
+### Example: Creating with Field Helpers
+
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("bob"),
+    generated.User.Age.Set(30),
+    generated.User.Role.Set("active"),
+  ).
+  Create(ctx)
+if err != nil {
+  // Handle error
+}
+```
+
+
+## 6. Working with Associations
+
+The generated helpers let you manage related entities using association operations like Create, Update, Unlink, and Delete.
+
+### Example: Create User with a Pet
+
+```go
+err := gorm.G[models.User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
+  ).
+  Create(ctx)
+if err != nil {
+  // Handle error
+}
+```
+
+
+### Example: Update Pet Name for a User's Pet
+
+```go
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(
+    generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex")),
+  ).
+  Update(ctx)
+if err != nil {
+  // Handle error
+}
+```
+
+
+### Example: Unlink and Delete Associations
+
+```go
+// Unlink pets from user
+err := gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Unlink()).
+  Update(ctx)
+
+// Delete pets for user
+err = gorm.G[models.User](db).
+  Where(generated.User.ID.Eq(1)).
+  Set(generated.User.Pets.Delete()).
+  Update(ctx)
+```
+
+
+## 7. Best Practices & Tips
+
+- **Always pass context.Context** to your queries to support cancellation and deadlines.
+- **Use generated query methods** where possible to benefit from type safety and automatic parameter binding.
+- **Chain field helpers fluently** for filter and update operations to keep your code clean and maintainable.
+- **Leverage association helpers** to keep relational data consistent and simplify complex updates.
+
+
+## 8. Troubleshooting Common Issues
+
+<AccordionGroup title="Common Pitfalls When Using Generated APIs">
+<Accordion title="Method Not Found on Generated Query">
+Check if your interface method is correctly defined with SQL template comment, and you’ve run the generator after modifications.
+</Accordion>
+<Accordion title="No Generated Package Import Found">
+Ensure your `-o` flag in the generation command points to the correct output directory, and your import path matches your module structure.
+</Accordion>
+<Accordion title="Field Helper Type Errors">
+Verify that your models have proper types and tags. Custom types may need mapping in `genconfig.Config`.
+</Accordion>
+<Accordion title="Database Connection Errors">
+Confirm your GORM database connection is properly initialized and your context is valid.
+</Accordion>
+</AccordionGroup>
+
+
+## 9. Next Steps
+
+- Dive deeper into [Working with Associations](../guides/advanced-patterns/association-workflows) for complex relationship handling.
+- Explore [Writing Custom Queries with SQL Templates](../guides/advanced-patterns/template-queries) to expand your query capabilities.
+- Review [Basic Configuration with genconfig](../../getting-started/config-gen-first-run/basic-configuration) to customize generation.
+
+---
+
+## Summary
+This page guides you through integrating and using the generated type-safe query interfaces and model-driven field helpers from GORM CLI into your Go applications. You learned how to initialize query clients, execute fluent queries with strong typing, perform updates, and manipulate associations effectively with practical code examples.
+
+For more advanced workflows and customization, consult relevant guides on associations, SQL templates, and configuration.
+
+---
