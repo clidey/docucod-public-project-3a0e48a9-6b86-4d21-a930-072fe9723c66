@@ -1,0 +1,255 @@
+---
+title: "Preparing Models & Query Interfaces"
+description: "Learn the best practices for structuring your model types and writing query interface methods using SQL templates. Understand naming, placement, and annotations needed for successful code generation."
+---
+
+# Preparing Models & Query Interfaces
+
+Learn the best practices for structuring your model types and writing query interface methods using SQL templates. Understand naming conventions, file placement, and required annotations to ensure successful and smooth code generation with GORM CLI.
+
+---
+
+## 1. Organizing Your Models
+
+Models are the backbone of your code generation, representing database tables as Go structs. Properly defined models enable the generation of rich field helpers that simplify querying, updating, and managing associations.
+
+### Best Practices for Model Structs
+
+- **Place models together in a dedicated package or folder** (e.g., `models/`) to keep code organized and make it easier for the generator to pick them up.
+
+- **Use well-known GORM conventions** for primary keys and timestamps, such as embedding `gorm.Model` or explicitly defining fields like `ID uint`, `CreatedAt`, `UpdatedAt`, and `DeletedAt`.
+
+- **Name fields clearly and consistently**. Field names should be exported (`Capitalized`) and use standard Go types or types known to GORM.
+
+- **Define associations explicitly using GORM tags**:
+  - `has one`, `has many`, and `belongs to` associations should have matching foreign keys and tags.
+  - Use `gorm:"polymorphic:Owner"` for polymorphic relationships.
+  - Many-to-many relations require `gorm:"many2many:<join_table>"` tags.
+
+- **Use struct tags and `gen:"<name>"` annotations for customization**:
+  - For example, use `gen:"json"` on a string field to indicate a JSON field helper should be generated.
+
+- **Example model struct from `examples/models/user.go`**:
+
+```go
+package models
+
+import (
+	"database/sql"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+type User struct {
+	gorm.Model
+	Name      string
+	Age       int
+	Birthday  *time.Time
+	Score     sql.NullInt64
+	LastLogin sql.NullTime
+	Account   Account
+	Pets      []*Pet
+	Toys      []Toy `gorm:"polymorphic:Owner"`
+	CompanyID *int
+	Company   Company
+	ManagerID *uint
+	Manager   *User
+	Team      []User     `gorm:"foreignkey:ManagerID"`
+	Languages []Language `gorm:"many2many:UserSpeak"`
+	Friends   []*User    `gorm:"many2many:user_friends"`
+	Role      string
+	IsAdult   bool   `gorm:"column:is_adult"`
+	Profile   string `gen:"json"`
+}
+```
+
+### Tips
+
+- Use pointers for optional or nullable fields.
+- Use standard nullable types like `sql.NullInt64`, `sql.NullTime` for nullability.
+- Define join tables and foreign keys explicitly for more complex relations.
+
+---
+
+## 2. Defining Query Interfaces with SQL Templates
+
+Query interfaces describe the operations you want to perform on your models with strongly typed, template-based SQL queries.
+
+### Writing Query Interfaces
+
+- **Place interfaces in the same or nearby package/folder as your models** to ease import and detection.
+
+- **Use Go generics with a type parameter `[T any]`** so the generator can create type-safe query APIs.
+
+- **Document your interface methods with raw SQL or templated SQL in comments** immediately above the method.
+
+- **Use SQL template directives provided by GORM CLI**:
+  - `@@table`: resolves to the model’s table name.
+  - `@@column`: dynamic column binding.
+  - `@param`: bind Go parameters directly.
+  - `{{where}}`, `{{set}}`, `{{if}}`, `{{for}}` to control conditional SQL and iteration.
+
+- **Example interface method from `examples/query.go`**:
+
+```go
+// Query interface example
+// GetByID retrieves record matching the id.
+//
+// SELECT * FROM @@table WHERE id=@id
+GetByID(id int) (T, error)
+
+// FilterWithColumn
+//
+// SELECT * FROM @@table WHERE @@column=@value
+FilterWithColumn(column string, value string) (T, error)
+
+// Query with complex conditional templates
+//
+// SELECT * FROM @@table
+//   {{if user.ID > 0}}
+//       WHERE id=@user.ID
+//   {{else if user.Name != ""}}
+//       WHERE name=@user.Name
+//   {{end}}
+QueryWith(user models.User) (T, error)
+```
+
+### Important Method Requirements
+
+- **Return values must follow GORM CLI conventions:**
+  - Methods that fetch data must return the data and `error`.
+  - Methods that perform writes must return at least an `error`.
+  - When two return values are used, the second must be `error`.
+
+- The CLI will **auto-inject `context.Context`** if not explicitly declared in parameters.
+
+### Tips
+
+- Write clear comments with SQL templates to enable code generation.
+- Use parameters matching method signatures for safe SQL param binding.
+- Leverage templating DSL for dynamic queries avoiding string concatenation.
+
+---
+
+## 3. How the Generator Finds and Processes Your Code
+
+Understanding the expected file and package layout helps your code generation succeed without configuration.
+
+### Placement and Naming
+
+- The generator processes **all Go files** under a given directory or specific file passed via the CLI input flag (`-i`).
+
+- It **automatically scans for:**
+  - Struct types (models) with exported fields.
+  - Interface types with documented SQL template methods.
+  - Package-level `genconfig.Config` declarations for configuration overrides.
+
+- File-level or package-level config can define inclusion or exclusion of interfaces and structs for generation.
+
+### Using `genconfig.Config` for Fine Control
+
+- Define a `var _ = genconfig.Config{...}` at the package level to specify:
+  - Output directory
+  - Include/Exclude patterns for interfaces and structs
+  - Field type or name mappings for custom helpers
+  - File level settings
+
+- Example config snippet:
+
+```go
+var _ = genconfig.Config{
+	OutPath: "examples/output",
+	IncludeInterfaces: []any{"Query*"},
+	FieldTypeMap: map[any]any{
+		sql.NullTime{}: field.Time{},
+	},
+	FieldNameMap: map[string]any{
+		"json": JSON{},
+	},
+}
+```
+
+---
+
+## 4. SQL Templating DSL Overview
+
+The SQL template language lets you embed dynamic SQL with Go-like templating syntax for safe, reusable queries.
+
+### Directives Explained
+
+| Directive   | Description                              | Example                                  |
+| ----------- | ---------------------------------------- | ---------------------------------------- |
+| `@@table`   | Replaced with the model’s DB table name | `SELECT * FROM @@table WHERE id=@id`     |
+| `@@column`  | Dynamic column in WHERE or SET clause   | `WHERE @@column=@value`                   |
+| `@param`    | Binds Go method parameters to SQL params| `WHERE name=@user.Name`                   |
+| `{{where}}` | Optional WHERE clause block              | `{{where}} age > 18 {{end}}`             |
+| `{{set}}`   | Dynamic SET clause for UPDATEs           | `{{set}} name=@name {{end}}`              |
+| `{{if}}`    | Conditional SQL snippets                  | `{{if user.Age >= 18}} is_adult=1 {{end}}`|
+| `{{for}}`   | Loop over slices or collections           | `{{for _, u := range users}} ... {{end}}`|
+
+### Example Dynamic Query Using Templates
+
+```sql
+-- Select users, filtering conditionally
+SELECT * FROM @@table
+{{where}}
+  {{if user.ID > 0}} WHERE id=@user.ID {{end}}
+  {{if user.Name != ""}} AND name=@user.Name {{end}}
+{{end}}
+```
+
+---
+
+## 5. Common Pitfalls & How to Avoid Them
+
+- **Unexported fields in model structs:**
+  - Private fields (`lowercase`) will not generate field helpers.
+
+- **Incorrect method signatures in interfaces:**
+  - Every method must have at least one return with error.
+  - Maximum two return values allowed.
+  - Last return must be `error`.
+
+- **Missing or malformed SQL template comments:**
+  - SQL must be documented directly above methods in comment blocks.
+
+- **Interface or struct files outside the generation input path:**
+  - Ensure the `-i` input path covers all files containing your interfaces and models.
+
+- **Mismatched or missing Package-level config when needed:**
+  - If using custom field mappings or inclusions, place config in the package.
+
+- **For complex relations, missing GORM tags:**
+  - Associations must be annotated properly for helpers to be generated correctly.
+
+---
+
+## 6. Next Steps
+
+Once you have prepared your models and interfaces as described, proceed to running the generator and using the generated code:
+
+- Follow the guide on [Running the Code Generator](./generate-code) to execute the CLI and produce code.
+- Consult the [Using the Generated APIs](./using-generated-code) guide to learn how to call generated methods and helpers in your application.
+- Explore [Basic Configuration Options](./basic-configuration-options) to customize generation behavior.
+
+
+---
+
+## References & Related Documentation
+
+- [GORM CLI Overview & Introduction](https://gorm.io/docs/cli.html#overview)
+
+- [SQL Template DSL Syntax](./templating-dsl)
+
+- [Working with Associations & Helpers](./association-helpers)
+
+- Sample Models: [`examples/models/user.go`](https://github.com/go-gorm/cli/blob/main/examples/models/user.go)
+
+- Sample Query Interface: [`examples/query.go`](https://github.com/go-gorm/cli/blob/main/examples/query.go)
+
+---
+
+<Tip>
+Start by organizing your Go models and query interfaces clearly and idiomatically. Use the built-in SQL templating DSL to declare concise, readable query methods with embedded SQL templates. This preparation unlocks the powerful code generation features of GORM CLI.
+</Tip>
