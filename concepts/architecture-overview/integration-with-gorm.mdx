@@ -1,162 +1,73 @@
 ---
 title: "Integration with GORM"
-description: "Explains how generated code interacts seamlessly with the GORM ecosystem, including how generated APIs wrap GORM DB objects, leverage GORM's features, and fit into your application's persistence layer. Clarifies the boundaries between generated code, your models, and the GORM library."
+description: "Explore how the generated code fits naturally into the GORM ecosystem. Learn about the design patterns that enable smooth adoption, leveraging GORM’s chaining and database abstractions while enriching them with compile-time safety."
 ---
 
 # Integration with GORM
 
-The generated code by GORM CLI is purpose-built to fit seamlessly within the GORM ecosystem, acting as a powerful extension layer that enhances your data access experience without disrupting your existing models or workflow. This page explains how the generated APIs interact with GORM’s native features, how they wrap and extend GORM DB objects, and where they fit in your application's persistence layer.
+Explore how the generated code from GORM CLI fits seamlessly into the GORM ecosystem. This page explains the design patterns, fluent APIs, and compile-time safety mechanisms that enable a smooth adoption experience, enriching your GORM workflows while leveraging its existing abstractions.
 
 ---
 
-## How Generated APIs Fit into GORM
+## Overview
 
-When you run GORM CLI, it generates two main kinds of code:
+GORM CLI generates code that extends the core `gorm.io/gorm` library by producing two complementary elements:
 
-- **Interface-driven type-safe query APIs:** These provide methods corresponding to your custom SQL templated Go interfaces.
-- **Model-driven field helpers:** These give you fluently discoverable, strongly typed helpers to build powerful, type-safe query predicates, updates, and association operations.
+- **Interface-driven, type-safe query APIs**: Generated from Go interfaces annotated with SQL templates, these APIs provide strongly typed database queries with fluent chaining.
+- **Model-driven field helpers**: Generated from Go model structs, these helpers provide typed filters, setters, and association operations for your fields.
 
-Together, these generated constructs wrap GORM’s native `*gorm.DB` instance, exposing and extending GORM’s core querying, updating, and association APIs while adding compile-time safety and discoverability.
+Together, these elements embed directly within the idiomatic GORM patterns allowing you to use your existing GORM `*gorm.DB` instances and augment them with generated, safer, and discoverable query methods.
 
-### Wrapping the GORM DB Object
+## Design Integration Patterns
 
-Each generated query interface receives and extends a `*gorm.DB` object under the hood. When you invoke methods like:
+### Embedding and Extending GORM Interfaces
+
+The generated query interfaces follow a clear pattern: they embed the base `gorm.Interface[T]` generic type within customized interface definitions and their implementations. This ensures that all the underlying GORM methods are natively accessible, while you get added type safety and specialized methods from the generated APIs.
+
+For example, for an interface `Query[T]`, GORM CLI generates:
+
+- `QueryInterface[T]` that embeds `gorm.Interface[T]`.
+- `QueryImpl[T]` that implements the interface and directly wraps a `gorm.Interface[T]` instance.
+
+This allows seamless chaining and interaction with GORM’s fluent API style:
 
 ```go
-query := generated.Query[User](db)
-user, err := query.GetByID(ctx, 123)
+func Query[T any](db *gorm.DB, opts ...clause.Expression) QueryInterface[T] {
+    return QueryImpl[T]{
+        Interface: gorm.G[T](db, opts...),
+    }
+}
+
+// Usage example:
+u, err := Query[User](db).GetByID(ctx, 123)
+users, err := Query[User](db).FilterByNameAndAge("jinzhu", 25).Find(ctx)
 ```
 
-…the underlying call translates into a GORM query executed via the provided `db` instance, enriched with typed SQL fragments as defined in your interface’s SQL templates.
+This pattern ensures a consistent developer experience without departing from GORM idioms.
 
-Similarly, the model-driven field helpers generate predicates and setters like:
+### Fluent Chaining and Extensibility
 
-```go
-gorm.G[User](db).
-  Where(generated.User.Age.Gt(18)).
-  Set(generated.User.Name.Set("Alice"))
-  .Update(ctx)
-```
+Generated methods that represent filters or query modifiers (e.g., `FilterByNameAndAge`) chain fluent calls on the embedded `gorm.Interface[T]`. This makes it easy to gradually build complex queries while preserving type correctness.
 
-…which directly augment GORM’s query builder with precise column names and strongly typed condition and update expressions. The generated helpers reduce errors and surface context-aware code completion.
+When a method executes a full query (such as fetching or updating rows), it terminates the chain by executing the composed SQL with proper parameter bindings, returning typed results or errors.
 
-<Info>
-This tight integration means your existing GORM setup, database connections, transactions, and context usage remain intact—it’s an additive experience rather than a replacement.
-</Info>
+### Model-Driven Field Helpers
 
----
+Field helpers are generated from your model structs to represent each column and association as typed predicates and setters. These helpers enable:
 
-## Using Generated Interfaces and Field Helpers
+- **Type-safe filtering** (e.g., `generated.User.Age.Gt(18)` for age > 18)
+- **Update setters** including increments and raw expressions
+- **Association operations** like creating related rows or unlinking associations with compile-time safety
 
-### Making Type-Safe Queries
-
-- **Instantiate Query Interfaces:** Use the generated interface constructor, passing your `*gorm.DB` instance.
-
-- **Invoke Methods:** Each method corresponds to a custom SQL template-powered query or mutation.
-
-- **Context Support:** Methods require a `context.Context`, allowing cancellation and deadline control in your application.
-
-Example:
+Example usage:
 
 ```go
-query := generated.Query[User](db)
-user, err := query.GetByID(ctx, 123)
-```
-
-This executes a safe, type-aware query behind the scenes using your model’s table and fields.
-
-### Constructing Queries with Field Helpers
-
-Use generated fields to build conditions without guessing column names or risking SQL injection:
-
-```go
+// Filter users older than 18
 users, err := gorm.G[User](db).
-  Where(generated.User.Name.Like("%jinzhu%"), generated.User.Age.Between(18, 65)).
+  Where(generated.User.Age.Gt(18)).
   Find(ctx)
-```
 
-### Performing Updates with Fluent Setters
-
-Apply zero-value and expression-based updates safely:
-
-```go
-gorm.G[User](db).
-  Where(generated.User.ID.Eq(1)).
-  Set(
-    generated.User.Name.Set("jinzhu"),
-    generated.User.Age.Incr(1),
-  ).
-  Update(ctx)
-```
-
-### Managing Associations
-
-Generated helpers enable fluent association operations with strong typing:
-
-```go
-gorm.G[User](db).
-  Set(
-    generated.User.Pets.Create(generated.Pet.Name.Set("fido")),
-  ).
-  Update(ctx)
-```
-
-This creates and associates a pet record for the user.
-
----
-
-## Boundaries between Generated Code, Your Models, and GORM
-
-| Layer                  | Responsibility                                       |
-|------------------------|---------------------------------------------------|
-| **Your GORM Models**   | Define database schema via structs, annotations; used throughout your app.
-|
-| **Generated Code**     | Provides type-safe query interfaces, field helpers, and association APIs built from your models and query interfaces.
-|
-| **GORM Library**       | Core ORM handling DB connections, transactions, query execution, migrations, and callbacks.
-
-
-### Why This Separation Matters
-
-- **Models remain pure:** You continue to define your domain models naturally with GORM tags.
-- **Generated code remains replaceable:** You can regenerate or update it without manual edits.
-- **GORM stays authoritative:** The actual querying and DB operations run on native GORM objects.
-
-<Note>
-Avoid directly modifying generated code since it is auto-generated and overwritten during code generation cycles.
-</Note>
-
----
-
-## Best Practices for Integration
-
-### Maintain Context Propagation
-
-Always pass `context.Context` to generated query and update methods to benefit from cancellation and timeout signals.
-
-### Use Your Own GORM DB Instance
-
-Pass your configured `*gorm.DB` (with logger, encryption, or plugins) to generated queries to ensure consistent behavior.
-
-### Regenerate After Model Changes
-
-Keep your generated code in sync by re-running code generation when you change model structs or query interfaces.
-
-### Leverage Configuration for Custom Types
-
-Use `genconfig.Config` to map custom model field types (e.g., JSON helpers) for consistent integration.
-
-### Combine Generated APIs and Native GORM
-
-When needed, mix generated code with raw GORM queries for operations not covered by generated methods or for advanced queries.
-
----
-
-## Common Integration Patterns
-
-### Creating a New Record Alongside Associations
-
-```go
+// Create user and associate a pet
 gorm.G[User](db).
   Set(
     generated.User.Name.Set("alice"),
@@ -165,96 +76,132 @@ gorm.G[User](db).
   Create(ctx)
 ```
 
-Creates a user with a pet in a single call.
+This pattern keeps your database operation code concise, fluent, and less error-prone.
 
-### Updating Associations Conditioned on Fields
+## Compile-Time Safety
+
+By generating concrete Go code that includes both the query interface methods and field helpers:
+
+- **Strongly typed method signatures guarantee correct parameter usage and result handling.**
+- **SQL templates are verified and rendered into type-safe Go implementations.**
+- **Association operations reflect correct foreign key and relation semantics, reducing runtime errors.**
+
+Together, these ensure that common mistakes such as mismatched types, missing parameters, or invalid association manipulations are caught during compilation rather than at runtime.
+
+## Configuration & Integration Considerations
+
+The generator is configurable via package-level `genconfig.Config` variables allowing you to:
+
+- Customize output directories for generated code
+- Filter which interfaces and structs to include or exclude during generation
+- Map custom Go types or struct tags to specialized field helpers (for example, JSON type mappings)
+
+Because the generated code lives alongside your models and queries, the integration feels natural and intuitive, supporting gradual adoption.
+
+## Example Walkthrough
+
+Suppose you have a `User` model:
 
 ```go
-gorm.G[User](db).
-  Where(generated.User.ID.Eq(1)).
-  Set(generated.User.Pets.Where(generated.Pet.Name.Eq("fido")).Update(generated.Pet.Name.Set("rex"))).
-  Update(ctx)
+// User model with associations and custom tag
+type User struct {
+  gorm.Model
+  Name string
+  Age  int
+  Pets []Pet
+  Profile string `gen:"json"`
+}
 ```
 
-Updates the pet named "fido" to "rex" for user ID 1.
-
-### Filtering Using Generated Field Helpers
+And an interface-driven query:
 
 ```go
-users, err := gorm.G[User](db).
-  Where(generated.User.Role.Eq("active"), generated.User.IsAdult.Eq(true)).
+type Query[T any] interface {
+  // SELECT * FROM @@table WHERE id=@id
+  GetByID(id int) (T, error)
+
+  // where("name=@name AND age=@age")
+  FilterByNameAndAge(name string, age int)
+}
+```
+
+Using GORM CLI, you generate code that produces:
+
+- `generated.Query[User](db)` returning a `QueryInterface[User]` allowing calls like `GetByID` or `FilterByNameAndAge`.
+- `generated.User` field helper with `Name`, `Age`, and association `Pets` fields supporting predicates and setters.
+
+Your application code can then fluently query:
+
+```go
+// Retrieve a user by ID
+u, err := generated.Query[User](db).GetByID(ctx, 123)
+
+// List users filtered by name and age
+users, err := generated.Query[User](db).
+  FilterByNameAndAge("jinzhu", 30).
   Find(ctx)
+
+// Create a user and a pet together
+gorm.G[User](db).
+  Set(
+    generated.User.Name.Set("alice"),
+    generated.User.Pets.Create(generated.Pet.Name.Set("rex")),
+  ).
+  Create(ctx)
 ```
 
-Filters adult users with active roles.
+## Visualizing the Integration
 
----
+```mermaid
+flowchart TD
 
-## Troubleshooting Integration Issues
+  subgraph Application Layer
+    UserModel["User Model Struct"]
+    QueryInterfaces["Generated Query Interfaces"]
+    FieldHelpers["Generated Model Field Helpers"]
+  end
+
+  subgraph GORM Core
+    GormDB["*gorm.DB Instance"]
+    GormInterface["gorm.Interface[T]"]
+  end
+
+  UserModel --> |"Input for generation"| QueryInterfaces
+  UserModel --> |"Input for generation"| FieldHelpers
+  QueryInterfaces --> |"Embed & extend"| GormInterface
+  FieldHelpers --> |"Use in filters & setters"| GormInterface
+  ApplicationLayer[Application Code] --> |"Invoke type-safe methods"| QueryInterfaces
+  ApplicationLayer --> |"Compose predicates / updates"| FieldHelpers
+  ApplicationLayer --> |"Underneath operations"| GormDB
+  GormDB --> |"Core DB operations"| GormInterface
+
+  classDef gorm fill:#0b74de,color:#fff,stroke:#076abf,stroke-width:2px;
+  class GormDB,GormInterface gorm;
+```
+
+## Best Practices & Tips
+
+- **Leverage field helpers for expressive and safe query and update definitions.** Use predicates like `Eq()`, `Gt()`, and setters like `Set()` or `Incr()` to clearly state intent.
+- **Use interface-driven queries to encapsulate common database operations with SQL templates** for maintainability.
+- **Configure generation carefully to include only relevant interfaces and structs**, avoiding unnecessary output and improving compile times.
+- **Implement association operations using the provided helpers** to enforce foreign key integrity and maintain clean relational code.
+- **Run validations on generated code early in your CI process** to catch any issues stemming from template or model changes.
+
+## Troubleshooting
 
 <AccordionGroup title="Common Integration Issues">
-<Accordion title="Generated Code Not Found or Import Errors">
-Check your `OutPath` matches your import paths. Ensure `go.mod` includes the generated package.
+<Accordion title="Generated Code Not Found or Not Imported">
+Verify your output directory matches your import paths and that you run the generator after changes. Check your `genconfig.Config` for output overrides.
 </Accordion>
-<Accordion title="Type Mismatches Between Models and Generated Helpers">
-Regenerate after any model changes, and verify custom field mappings via `genconfig.Config`.
+<Accordion title="Compilation Errors on Generated Methods">
+Check that your Go interfaces follow the required method signature rules. All methods with SQL templates must have appropriate return types (error or typed results).
 </Accordion>
-<Accordion title="Queries Return Unexpected Results or Errors">
-Double-check context propagation and that SQL template placeholders match method parameters.
-Ensure your DB is properly configured and connected.
-</Accordion>
-<Accordion title="Associations Not Created or Updated Correctly">
-Verify association sequences in `Set()` calls and that foreign keys are correctly mapped in your models.
+<Accordion title="Type Mismatches in Queries or Updates">
+Ensure your model structs and field tags align with your query interface and generation config especially if using custom field helpers.
 </Accordion>
 </AccordionGroup>
 
 ---
 
-## Visualization: Integration Flow
+For a deeper dive into setting up your project, visit [Configuration and Customization](../getting-started/first-run/configuration-setup) and explore examples in the [Quick Start Guide](../getting-started/first-run/quickstart-sample).
 
-```mermaid
-flowchart TD
-  UserModels["Your GORM Models (structs)"] -->|Input| CodeGenerator["GORM CLI Code Generator"]
-  UserInterfaces["Your Query Interfaces with SQL Templates"] -->|Input| CodeGenerator
-  CodeGenerator -->|Generates| GeneratedCode["Generated Type-Safe Query APIs & Field Helpers"]
-  GeneratedCode -->|Wraps| GormDB["*gorm.DB Instance"]
-  YourApp["Your Application Layer"] -->|Uses| GeneratedCode
-  YourApp -->|Direct| GormDB
-  GormDB -->|Executes SQL| Database[("Database")]
-
-  subgraph Application
-    YourApp
-    GeneratedCode
-  end
-
-  subgraph Persistence
-    GormDB
-    Database
-  end
-```
-
-This diagram illustrates how your models and interfaces are inputs to the code generator, which produces code that wraps and extends GORM's native `*gorm.DB`. Your application consumes generated APIs on top of GORM, which interacts directly with the database.
-
----
-
-## Summary
-
-Integrating GORM CLI-generated code into your GORM projects elevates your data access layer by providing type-safe, discoverable APIs that work harmoniously with GORM’s core functionalities. Generated query interfaces and field helpers act as rich, compile-time safe wrappers around `*gorm.DB`, enhancing productivity and reducing runtime errors.
-
-Ensure your application passes the GORM DB instances and context correctly, regenerate code after model/interface changes, and leverage configuration to handle custom field types. The blend of generated code and native GORM gives you the best of both worlds: power, safety, and flexibility.
-
-For examples, troubleshooting tips, and deeper understanding, consult these related resources in the documentation.
-
----
-
-## Related Documentation
-
-- [Using the Generated Code](../../getting-started/initial-usage/use-generated-code) — How to call generated interfaces from your application
-- [Code Generation Workflow](../../overview/integration-and-use/generation-workflow) — How code is generated from your interfaces and models
-- [Association Operation Concepts](../../concepts/data-models-apis/association-models) — Understanding generated helpers for relationships
-- [Customizing Generation with Config](../../concepts/configuration-and-extensibility/generation-config) — Tailoring generation for custom types
-- [Type-Safe Queries Guide](../../guides/core-workflows/type-safe-queries) — Defining and leveraging SQL template interfaces
-
----
-
-Explore deeper integration, advanced usage, and best practices in the broader GORM CLI documentation to unlock the full potential of this tool in your GORM-powered applications.
