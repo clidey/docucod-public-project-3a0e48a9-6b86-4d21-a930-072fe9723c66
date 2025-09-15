@@ -1,0 +1,242 @@
+---
+title: "Create Models and Query Interfaces"
+description: "Discover how to define Go structs for models and minimal query interface definitions that power the generator. Includes essential file placement and code samples for immediate adoption."
+---
+
+# Create Models and Query Interfaces
+
+Discover how to define your Go model structs and minimal query interface definitions to enable GORM CLI's powerful code generation. This page guides you through file placement, interface method annotations, and practical examples that get you from zero to a functional generation setup.
+
+---
+
+## 1. Overview
+
+GORM CLI generates strongly typed, type-safe query APIs and model-driven field helpers from two primary inputs in your Go codebase:
+
+- **Models**: Plain Go structs representing your database tables.
+- **Query Interfaces**: Minimal Go interfaces with methods annotated by SQL templates in comments.
+
+Together, these define the shape of your data and the queries you want to enable.
+
+This page focuses on defining these source files correctly so the code generator picks them up automatically.
+
+<Check>
+The goal is to write simple Go files that expose your models and query patterns cleanly, then run `gorm gen` to generate safe and efficient query code.
+</Check>
+
+---
+
+## 2. Define Your Models
+
+Models are standard Go structs that represent your database schema for GORM. The generator reads their fields to create model-driven field helpers.
+
+### Best Practices
+
+- Place model definitions in a dedicated package, e.g., `models`.
+- Use Go struct tags with `gorm` to define column mappings.
+- Optionally add `gen:"custom"` tags to map fields to specialized field helpers.
+
+### Example: `models/user.go`
+
+```go
+package models
+
+import "gorm.io/gorm"
+
+type User struct {
+    gorm.Model
+
+    Name   string
+    Age    int
+    Role   string
+    Active bool
+
+    // Use gen tag to specify custom helper mapping (optional)
+    Profile string `gen:"json"`
+}
+```
+
+> The `gorm.Model` includes standard fields like ID, CreatedAt, UpdatedAt.
+
+<Tip>
+You don't need special interfaces or inheritance for models, just plain structs with GORM tags.
+</Tip>
+
+---
+
+## 3. Define Query Interfaces with SQL Templates
+
+Query interfaces are Go interfaces with type parameterization (`T any`) to abstract over your model struct types. Methods in the interface include SQL templates in comments.
+
+### Key Points
+
+- Each method comment contains raw SQL or SQL template directives describing what SQL the method should execute.
+- Place these interface files near models or in separate packages, referenced by the generator.
+- The generator uses these comments to produce concrete, type-safe implementations.
+
+### Minimal Interface Example: `examples/query.go`
+
+```go
+package examples
+
+import "gorm.io/cli/gorm/examples/models"
+
+type Query[T any] interface {
+    // SELECT * FROM @@table WHERE id=@id
+    GetByID(id int) (T, error)
+
+    // SELECT * FROM @@table WHERE @@column=@value
+    FilterWithColumn(column string, value string) (T, error)
+
+    // SELECT * FROM @@table
+    // {{where}}
+    //   {{if user.ID > 0}} WHERE id=@user.ID {{else if user.Name != ""}} WHERE name=@user.Name {{end}}
+    // {{end}}
+    QueryWith(user models.User) (T, error)
+
+    // UPDATE @@table
+    // {{set}}
+    //   {{if user.Name != ""}} name=@user.Name, {{end}}
+    //   {{if user.Age > 0}} age=@user.Age, {{end}}
+    // {{end}}
+    // WHERE id=@id
+    UpdateInfo(user models.User, id int) error
+}
+```
+
+### Template Annotations Explained
+
+- `@@table` resolves to the model's table name.
+- `@param` maps method parameters to SQL query parameters.
+- `{{where}}`, `{{set}}`, `{{if}}`, and other templating directives enable dynamic query parts.
+
+<Info>
+Methods without an explicit `context.Context` parameter will have it auto-injected by the generator for proper asynchronous database calls.
+</Info>
+
+---
+
+## 4. Organize Files and Packages
+
+Proper placement ensures the generator finds both models and interfaces correctly.
+
+### Recommended Layout
+
+```plaintext
+/project-root
+  /models
+    user.go        # Model structs
+  /examples
+    query.go       # Query interface with SQL comments
+    genconfig.go   # Optional generation config
+```
+
+- Generator scans the input path for interface definitions and linked models.
+- Interface and model packages can be the same or separate, as long as they are part of the input.
+
+<Tip>
+If you use `genconfig.Config` in your package, the generator picks it up automatically.
+</Tip>
+
+---
+
+## 5. Example: Pattern-Matched Interfaces
+
+You can limit generation to only interfaces matching certain patterns.
+
+### Example Config: `examples/filters/pattern/config.go`
+
+```go
+package pattern
+
+import "gorm.io/cli/gorm/genconfig"
+
+var _ = genconfig.Config{
+    IncludeInterfaces: []any{"Query*"},
+}
+```
+
+### Example Query Interfaces: `examples/filters/pattern/iface.go`
+
+```go
+package pattern
+
+type QueryUser[T any] interface {
+    // SELECT * FROM @@table WHERE id=@id
+    ByID(id int) (T, error)
+}
+
+type QueryOrder[T any] interface {
+    // SELECT * FROM @@table WHERE number=@no
+    ByNumber(no string) (T, error)
+}
+
+// Service interface will NOT be generated because it does not match "Query*" pattern
+```
+
+---
+
+## 6. How to Use After Defining Models and Interfaces
+
+After you complete your model definitions and query interfaces:
+
+1. Run the GORM CLI generate command:
+
+```bash
+gorm gen -i ./examples -o ./generated
+```
+
+- `-i` is the input path where your interface and models reside.
+- `-o` is the output path for generated code.
+
+2. Use the generated code in your application:
+
+```go
+import "generated"
+
+user, err := generated.Query[models.User](db).GetByID(ctx, 123)
+```
+
+This will execute the typed, safe SQL query based on your interface method.
+
+---
+
+## 7. Troubleshooting and Tips
+
+<AccordionGroup title="Common Questions & Issues">
+<Accordion title="My methods don't appear in generated code">
+Check that your interfaces have methods with SQL comments exactly formatted as per examples, including `@@table` placeholders.
+</Accordion>
+<Accordion title="Injection of context.Context parameter">
+If your method doesn't declare `ctx context.Context`, the generator automatically adds it. However, adding it explicitly is recommended for clarity.
+</Accordion>
+<Accordion title="Matching interfaces with patterns">
+Use `IncludeInterfaces` and `ExcludeInterfaces` in a package-level `genconfig.Config` to customize which interfaces are generated.
+</Accordion>
+<Accordion title="Field helper generation for models">
+Make sure your model structs are in the scanned input paths so the generator can build field helpers for filters and updates.
+</Accordion>
+</AccordionGroup>
+
+---
+
+## 8. Summary
+
+By defining clean Go structs for your data models and minimal Go interfaces with SQL template comments for your queries, GORM CLI automatically generates type-safe, fluent query APIs and model-driven helpers that integrate seamlessly with your Go code and GORM ORM.
+
+Start small with a single model and query interface, run generation, and test your generated queries. Expand your SQL templates incrementally for increasing power and safety.
+
+---
+
+## Reference Links
+
+- [GORM CLI Installation Guide](/getting-started/setup/installation)
+- [Basic Generator Configuration](/getting-started/project-initialization/basic-configuration)
+- [Generated Code Usage Examples](https://github.com/go-gorm/cli/tree/main/examples)
+- [Value Proposition & Use Cases](/overview/getting-started-intro/value-proposition-use-cases)
+
+---
+
+<Check>
+Successful definition of models and query interfaces is the foundation for safe and maintainable DB access using GORM CLI.
+</Check>
